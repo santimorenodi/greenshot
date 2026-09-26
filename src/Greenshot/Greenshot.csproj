@@ -63,7 +63,8 @@
 
   <UsingTask TaskName="EmojiDataTask" TaskFactory="TaskHostFactory" AssemblyFile="..\Greenshot.BuildTasks\bin\$(Configuration)\$(TargetFramework)\Greenshot.BuildTasks.dll" />
 
-  <Target Name="GenerateEmojiTestTxtFile" BeforeTargets="BeforeBuild">
+  <!-- Run after project references are built, so Greenshot.BuildTasks.dll exists on a clean build -->
+  <Target Name="GenerateEmojiTestTxtFile" AfterTargets="ResolveProjectReferences">
     <EmojiDataTask EmojiTestTxtFile="..\Greenshot.Editor\Controls\Emoji\emoji-test.txt" OutputFilename="$(SolutionDir)$(SolutionName)\$(OutDir)\emojis.xml" />
   </Target>
 

@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk.WindowsDesktop">
+  <PropertyGroup>
+    <RootNamespace>Greenshot.Cli</RootNamespace>
+    <AssemblyName>greenshot-cli</AssemblyName>
+    <OutputType>Exe</OutputType>
+    <ApplicationIcon>..\Greenshot\icons\applicationIcon\icon.ico</ApplicationIcon>
+    <!-- Same manifest as Greenshot.exe: per-monitor DPI awareness, so coordinates are physical pixels -->
+    <ApplicationManifest>..\Greenshot\greenshot.manifest</ApplicationManifest>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+    <DebugType>none</DebugType>
+    <DebugSymbols>false</DebugSymbols>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Greenshot.Base\Greenshot.Base.csproj" />
+    <!-- Only for DefaultFileFormatHandler (png, jpg, bmp, gif, tiff writing) -->
+    <ProjectReference Include="..\Greenshot.Editor\Greenshot.Editor.csproj" />
+  </ItemGroup>
+
+  <!-- Put greenshot-cli.exe next to Greenshot.exe (all its dependencies are already there), so "open in editor" can find Greenshot.exe -->
+  <Target Name="CopyCliNextToGreenshot" AfterTargets="Build">
+    <Copy SourceFiles="$(TargetPath);$(TargetPath).config" DestinationFolder="$(MSBuildThisFileDirectory)..\Greenshot\bin\$(Configuration)\$(TargetFramework)" SkipUnchangedFiles="true" />
+  </Target>
+</Project>

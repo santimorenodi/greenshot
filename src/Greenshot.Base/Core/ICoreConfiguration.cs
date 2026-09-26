@@ -57,7 +57,8 @@ namespace Greenshot.Base.Core
         string WindowHotkey { get; set; }
 
         [Description("Hotkey for starting the fullscreen capture")]
-        [DefaultValue("Ctrl + PrintScreen")]
+        // Ctrl + PrintScreen is used by wcap (monitor recording), so use Ctrl + Alt + PrintScreen instead
+        [DefaultValue("Ctrl + Alt + PrintScreen")]
         string FullscreenHotkey { get; set; }
 
         [Description("Hotkey for starting the last region capture")]

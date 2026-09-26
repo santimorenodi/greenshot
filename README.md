@@ -43,6 +43,24 @@ Releases
 You can find a list of all releases (stable and unstable) in the [Github releases](https://github.com/greenshot/greenshot/releases) or in the [version history on our website](https://getgreenshot.org/version-history/).
 The [downloads page on our website](https://getgreenshot.org/downloads/) always links to the latest stable release.
 
+Command line screenshots (greenshot-cli)
+----------------------------------------
+
+Building the solution also produces `greenshot-cli.exe` next to `Greenshot.exe`. It takes screenshots with the Greenshot
+capture engine without any UI, uses default settings in memory (never touches greenshot.ini) and can run while Greenshot is running.
+
+    greenshot-cli list                                    monitors (index) and windows (handle, title)
+    greenshot-cli capture [target] [options]
+
+    target:   --fullscreen (default) | --monitor N | --active | --window 0xHANDLE | --window "title" | --region X,Y,W,H
+    options:  -o FILE (png/jpg/bmp/gif/tiff from extension), --format F, --quality N, --delay SEC,
+              --mode auto|aero|aerotransparent|gdi|screen, --clipboard, --open (open in Greenshot editor)
+
+It prints `saved: PATH` and `size: WxH`, exit code is 0 on success.
+
+Default hotkeys in this fork: region `PrintScreen`, window `Alt + PrintScreen`, last region `Shift + PrintScreen`,
+fullscreen `Ctrl + Alt + PrintScreen` (moved from `Ctrl + PrintScreen`, which is used by wcap).
+
 Getting Started for Developers:
 -------------------------------
 
