@@ -33,22 +33,25 @@ using Greenshot.Base.Core;
 using Greenshot.Base.Core.Enums;
 using Greenshot.Base.Interfaces;
 using Greenshot.Base.Interfaces.Plugin;
+using Greenshot.Editor.Configuration;
+using Greenshot.Editor.Drawing;
 using Greenshot.Editor.FileFormatHandlers;
 
 namespace Greenshot.Cli;
 
 /// <summary>
-/// Command line interface for taking screenshots with the Greenshot capture engine, without any UI.
+/// Command line interface for taking and annotating screenshots with the Greenshot capture engine and editor, without any UI.
 /// It uses an in-memory default configuration, so it never touches greenshot.ini and can run next to Greenshot.exe.
 /// </summary>
 internal static class Program
 {
     private const string Usage =
-        "greenshot-cli - take screenshots from the command line with the Greenshot capture engine\n" +
+        "greenshot-cli - take and annotate screenshots from the command line with the Greenshot capture engine and editor\n" +
         "\n" +
         "usage:\n" +
-        "  greenshot-cli list                          list monitors and capturable windows\n" +
-        "  greenshot-cli capture [target] [options]    take a screenshot and save it to a file\n" +
+        "  greenshot-cli list                                        list monitors and capturable windows\n" +
+        "  greenshot-cli capture [target] [options] [annotations]    take a screenshot, annotate it and save it\n" +
+        "  greenshot-cli edit INPUT [options] [annotations]          annotate an image (png, jpg, bmp, gif, tiff, .greenshot)\n" +
         "\n" +
         "target (default is --fullscreen):\n" +
         "  --fullscreen          all monitors\n" +
@@ -58,16 +61,23 @@ internal static class Program
         "  --region X,Y,W,H      rectangle in virtual screen coordinates\n" +
         "\n" +
         "options:\n" +
-        "  -o, --output FILE     output file, format from extension (default: greenshot_<timestamp>.png in current folder)\n" +
-        "  --format F            png, jpg, bmp, gif, tiff (overrides the extension)\n" +
+        "  -o, --output FILE     output file, format from extension (capture default: greenshot_<timestamp>.png in the\n" +
+        "                        current folder, edit default: overwrite INPUT)\n" +
+        "  --format F            png, jpg, bmp, gif, tiff, greenshot (overrides the extension)\n" +
         "  --quality N           jpg quality 1-100 (default 80)\n" +
-        "  --delay SEC           wait before capturing (e.g. 1.5)\n" +
-        "  --mode M              window capture mode: auto (default), aero, aerotransparent, gdi, screen\n" +
+        "  --delay SEC           capture only: wait before capturing (e.g. 1.5)\n" +
+        "  --mode M              capture only: window capture mode auto (default), aero, aerotransparent, gdi, screen\n" +
         "  --clipboard           also copy the image to the clipboard\n" +
         "  --open                open the screenshot in the Greenshot editor afterwards\n" +
         "\n" +
+        Annotations.Usage +
+        "\n" +
         "output (stdout): 'saved: PATH' and 'size: WxH'\n" +
-        "exit code: 0 on success, 1 on error\n";
+        "exit code: 0 on success, 1 on error\n" +
+        "\n" +
+        "example:\n" +
+        "  greenshot-cli capture --active --color #E53935 --thickness 4 --arrow 900,80,700,210 --step 690,220 \\\n" +
+        "    --font-size 18 --bubble 900,40,260,70,880,110 \"Click here\" --pixelate 40,600,300,40 --drop-shadow -o shot.png\n";
 
     [STAThread]
     private static int Main(string[] args)
@@ -86,8 +96,13 @@ internal static class Program
 
             // In-memory configuration with defaults, the capture code reads its settings from it
             IniConfigHelper.EnsureInitialized();
+            // The editor elements read their default colors, fonts etc. from here, also in memory with defaults
+            IniConfigHelper.EnsureSection<IEditorConfiguration>(() => new EditorConfigurationImpl());
             // ImageIO saves through the registered file format handlers, Greenshot.exe registers them in EditorInitialize
             SimpleServiceProvider.Current.AddService<IFileFormatHandler>(new DefaultFileFormatHandler());
+            // .greenshot files keep the elements editable, loading one needs to know how to make a surface
+            SimpleServiceProvider.Current.AddService<IFileFormatHandler>(new GreenshotFileFormatHandler());
+            SimpleServiceProvider.Current.AddService<Func<ISurface>>(() => new Surface());
 
             switch (args[0])
             {
@@ -95,6 +110,8 @@ internal static class Program
                     return List();
                 case "capture":
                     return Capture(args.Skip(1).ToArray());
+                case "edit":
+                    return Edit(args.Skip(1).ToArray());
                 default:
                     throw new CliException($"unknown command: {args[0]}, see 'greenshot-cli help'");
             }
@@ -140,9 +157,14 @@ internal static class Program
         bool clipboard = false;
         bool open = false;
         int targets = 0;
+        var annotations = new Annotations();
 
         for (int i = 0; i < args.Length; i++)
         {
+            if (annotations.TryParse(args, ref i))
+            {
+                continue;
+            }
             string arg = args[i];
             string NextValue()
             {
@@ -211,15 +233,7 @@ internal static class Program
         }
 
         string fullPath = ResolveOutputPath(output, ref format);
-        OutputFormat outputFormat = format switch
-        {
-            "png" => OutputFormat.png,
-            "jpg" or "jpeg" => OutputFormat.jpg,
-            "bmp" => OutputFormat.bmp,
-            "gif" => OutputFormat.gif,
-            "tif" or "tiff" => OutputFormat.tiff,
-            _ => throw new CliException($"unsupported format: {format}")
-        };
+        OutputFormat outputFormat = ParseOutputFormat(format, annotations);
 
         // resolve window before the delay, so a wrong title fails fast
         WindowDetails window = target switch
@@ -251,32 +265,198 @@ internal static class Program
             throw new CliException("capture failed");
         }
 
-        using (Image image = capture.Image)
+        // the surface owns the image from here on
+        using (var surface = new Surface(capture.Image))
         {
-            ImageIO.SaveRenderedImage(image, fullPath, true, new SurfaceOutputSettings(outputFormat, quality), false);
-            if (new FileInfo(fullPath).Length == 0)
-            {
-                File.Delete(fullPath);
-                throw new CliException($"no file format handler could write {format}");
-            }
-            if (clipboard)
-            {
-                Clipboard.SetImage(image);
-            }
-            Console.WriteLine($"saved: {fullPath}");
-            Console.WriteLine($"size: {image.Width}x{image.Height}");
+            Save(surface, annotations, fullPath, format, outputFormat, quality, clipboard);
         }
 
         if (open)
         {
-            string greenshotExe = Path.Combine(AppContext.BaseDirectory, "Greenshot.exe");
-            if (!File.Exists(greenshotExe))
-            {
-                throw new CliException($"cannot open editor, {greenshotExe} not found");
-            }
-            Process.Start(greenshotExe, $"\"{fullPath}\"")?.Dispose();
+            OpenInEditor(fullPath);
         }
         return 0;
+    }
+
+    private static int Edit(string[] args)
+    {
+        string input = null;
+        string output = null;
+        string format = null;
+        int quality = 80;
+        bool clipboard = false;
+        bool open = false;
+        var annotations = new Annotations();
+
+        for (int i = 0; i < args.Length; i++)
+        {
+            if (annotations.TryParse(args, ref i))
+            {
+                continue;
+            }
+            string arg = args[i];
+            string NextValue()
+            {
+                if (i + 1 >= args.Length)
+                {
+                    throw new CliException($"{arg} requires a value");
+                }
+                return args[++i];
+            }
+
+            switch (arg)
+            {
+                case "-o":
+                case "--output":
+                    output = NextValue();
+                    break;
+                case "--format":
+                    format = NextValue().ToLowerInvariant();
+                    break;
+                case "--quality":
+                    quality = ParseInt(arg, NextValue());
+                    if (quality < 1 || quality > 100)
+                    {
+                        throw new CliException("--quality must be 1-100");
+                    }
+                    break;
+                case "--clipboard":
+                    clipboard = true;
+                    break;
+                case "--open":
+                    open = true;
+                    break;
+                default:
+                    if (arg.StartsWith("-") || input != null)
+                    {
+                        throw new CliException($"unknown argument: {arg}");
+                    }
+                    input = arg;
+                    break;
+            }
+        }
+
+        if (input == null)
+        {
+            throw new CliException("edit needs an input image, see 'greenshot-cli help'");
+        }
+        string inputPath = Path.GetFullPath(input);
+        if (!File.Exists(inputPath))
+        {
+            throw new CliException($"{inputPath} does not exist");
+        }
+
+        string fullPath = ResolveOutputPath(output ?? inputPath, ref format);
+        OutputFormat outputFormat = ParseOutputFormat(format, annotations);
+
+        using (var surface = LoadSurface(inputPath))
+        {
+            Save(surface, annotations, fullPath, format, outputFormat, quality, clipboard);
+        }
+
+        if (open)
+        {
+            OpenInEditor(fullPath);
+        }
+        return 0;
+    }
+
+    /// <summary>
+    /// A surface with the image, or with the image and the elements of a .greenshot file
+    /// </summary>
+    private static Surface LoadSurface(string path)
+    {
+        if (string.Equals(Path.GetExtension(path), ".greenshot", StringComparison.OrdinalIgnoreCase))
+        {
+            using var stream = File.OpenRead(path);
+            return (Surface) new GreenshotFileFormatHandler().LoadSurface(stream);
+        }
+
+        Image image;
+        try
+        {
+            image = ImageIO.LoadImage(path);
+        }
+        catch (Exception ex)
+        {
+            throw new CliException($"cannot read {path}: {ex.Message}");
+        }
+        return new Surface(image ?? throw new CliException($"cannot read {path}"));
+    }
+
+    /// <summary>
+    /// Apply the annotations and save: a .greenshot keeps the elements editable, anything else is the rendered image
+    /// </summary>
+    private static void Save(Surface surface, Annotations annotations, string fullPath, string format, OutputFormat outputFormat, int quality, bool clipboard)
+    {
+        annotations.ApplyTo(surface);
+        var settings = new SurfaceOutputSettings(outputFormat, quality);
+
+        if (outputFormat == OutputFormat.greenshot)
+        {
+            ImageIO.Save(surface, fullPath, true, settings, false);
+            CheckWritten(fullPath, format);
+            if (clipboard)
+            {
+                using var rendered = surface.GetImageForExport();
+                Clipboard.SetImage(rendered);
+            }
+            Console.WriteLine($"saved: {fullPath}");
+            Console.WriteLine($"size: {surface.Image.Width}x{surface.Image.Height}");
+            return;
+        }
+
+        using Image image = annotations.ApplyEffects(surface.GetImageForExport());
+        ImageIO.SaveRenderedImage(image, fullPath, true, settings, false);
+        CheckWritten(fullPath, format);
+        if (clipboard)
+        {
+            Clipboard.SetImage(image);
+        }
+        Console.WriteLine($"saved: {fullPath}");
+        Console.WriteLine($"size: {image.Width}x{image.Height}");
+    }
+
+    private static void CheckWritten(string fullPath, string format)
+    {
+        if (File.Exists(fullPath) && new FileInfo(fullPath).Length > 0)
+        {
+            return;
+        }
+        if (File.Exists(fullPath))
+        {
+            File.Delete(fullPath);
+        }
+        throw new CliException($"no file format handler could write {format}");
+    }
+
+    private static OutputFormat ParseOutputFormat(string format, Annotations annotations)
+    {
+        OutputFormat outputFormat = format switch
+        {
+            "png" => OutputFormat.png,
+            "jpg" or "jpeg" => OutputFormat.jpg,
+            "bmp" => OutputFormat.bmp,
+            "gif" => OutputFormat.gif,
+            "tif" or "tiff" => OutputFormat.tiff,
+            "greenshot" => OutputFormat.greenshot,
+            _ => throw new CliException($"unsupported format: {format}")
+        };
+        if (outputFormat == OutputFormat.greenshot && annotations.HasEffects)
+        {
+            throw new CliException("image effects can't be kept editable, save to png, jpg, bmp, gif or tiff to use them");
+        }
+        return outputFormat;
+    }
+
+    private static void OpenInEditor(string fullPath)
+    {
+        string greenshotExe = Path.Combine(AppContext.BaseDirectory, "Greenshot.exe");
+        if (!File.Exists(greenshotExe))
+        {
+            throw new CliException($"cannot open editor, {greenshotExe} not found");
+        }
+        Process.Start(greenshotExe, $"\"{fullPath}\"")?.Dispose();
     }
 
     private static string ResolveOutputPath(string output, ref string format)
@@ -364,6 +544,4 @@ internal static class Program
         }
         return result;
     }
-
-    private sealed class CliException(string message) : Exception(message);
 }

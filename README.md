@@ -58,6 +58,25 @@ capture engine without any UI, uses default settings in memory (never touches gr
 
 It prints `saved: PATH` and `size: WxH`, exit code is 0 on success.
 
+It also annotates, with the Greenshot editor itself running headless: each element is drawn as if dragged with the
+mouse, so the result looks exactly like annotating in the editor. Annotations go after `capture`, or on any image with
+`edit`, and are applied in the order given:
+
+    greenshot-cli edit INPUT [-o FILE] [annotations]      png, jpg, bmp, gif, tiff or .greenshot in, same out
+
+    elements: --rect/--ellipse X,Y,W,H, --line/--arrow X1,Y1,X2,Y2, --freehand "X,Y;X,Y;...",
+              --text X,Y[,W,H] TEXT, --bubble X,Y,W,H,TX,TY TEXT, --step X,Y[,SIZE] (numbered 1, 2, 3...),
+              --highlight, --spotlight, --grayscale-area, --magnify, --pixelate, --blur X,Y,W,H, --crop X,Y,W,H
+    style:    --color, --fill (name, #RRGGBB, #AARRGGBB), --thickness, --font, --font-size, --bold, --italic,
+              --shadow/--no-shadow, --heads end|start|both|none, --pixel-size, --blur-radius, --magnification
+    effects:  --border, --drop-shadow, --torn-edge, --grayscale, --invert, --rotate N, --resize W,H, --scale PERCENT
+
+Style arguments apply to the elements after them. Saving to `.greenshot` keeps every element editable in Greenshot.
+
+    greenshot-cli capture --active --crop 0,0,1280,760 --pixelate 860,20,300,32 --color #E53935 --thickness 4 ^
+      --arrow 700,420,560,300 --step 700,430 --font-size 20 --bubble 760,460,300,70,700,430 "Then press Save" ^
+      --drop-shadow -o howto.png
+
 Default hotkeys in this fork: region `PrintScreen`, window `Alt + PrintScreen`, last region `Shift + PrintScreen`,
 fullscreen `Ctrl + Alt + PrintScreen` (moved from `Ctrl + PrintScreen`, which is used by wcap).
 
@@ -65,7 +84,8 @@ Claude Code plugin
 ------------------
 
 This repo is also a [Claude Code](https://claude.com/claude-code) plugin marketplace. The `greenshot` plugin adds skills
-that teach Claude to take screenshots with `greenshot-cli` (`take-screenshot`) and to build & configure Greenshot (`setup-greenshot`):
+that teach Claude to take screenshots with `greenshot-cli` (`take-screenshot`), to annotate them (`annotate-screenshot`)
+and to build & configure Greenshot (`setup-greenshot`):
 
     /plugin marketplace add santimorenodi/greenshot
     /plugin install greenshot@greenshot

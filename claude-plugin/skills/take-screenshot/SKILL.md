@@ -59,6 +59,9 @@ Options:
 - `--clipboard` also copy the image to the clipboard
 - `--open` open the result in the Greenshot editor so the user can annotate it
 
+To draw on it (arrows, text, steps, blur, crop...) add annotation arguments to `capture` or use
+`greenshot-cli edit`, see the `annotate-screenshot` skill.
+
 Output on stdout, exit code 0 on success:
 
 ```

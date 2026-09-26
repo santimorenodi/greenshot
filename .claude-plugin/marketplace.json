@@ -5,14 +5,14 @@
     "url": "https://github.com/santimorenodi"
   },
   "metadata": {
-    "description": "Claude Code plugin for taking screenshots with greenshot-cli"
+    "description": "Claude Code plugin for taking and annotating screenshots with greenshot-cli"
   },
   "plugins": [
     {
       "name": "greenshot",
       "source": "./claude-plugin",
-      "description": "Take screenshots of the screen, a monitor, a window or a region on Windows with greenshot-cli",
-      "version": "1.0.0"
+      "description": "Take and annotate screenshots (arrows, text, steps, blur, crop...) on Windows with greenshot-cli",
+      "version": "1.1.0"
     }
   ]
 }
