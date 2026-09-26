@@ -1,0 +1,13 @@
+{
+  "name": "greenshot",
+  "version": "1.0.0",
+  "description": "Skills for taking screenshots on Windows with greenshot-cli (Greenshot capture engine, no UI) and building/configuring Greenshot",
+  "author": {
+    "name": "santimorenodi",
+    "url": "https://github.com/santimorenodi"
+  },
+  "homepage": "https://github.com/santimorenodi/greenshot",
+  "repository": "https://github.com/santimorenodi/greenshot",
+  "license": "GPL-3.0-only",
+  "keywords": ["screenshot", "capture", "windows", "greenshot"]
+}

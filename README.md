@@ -61,6 +61,18 @@ It prints `saved: PATH` and `size: WxH`, exit code is 0 on success.
 Default hotkeys in this fork: region `PrintScreen`, window `Alt + PrintScreen`, last region `Shift + PrintScreen`,
 fullscreen `Ctrl + Alt + PrintScreen` (moved from `Ctrl + PrintScreen`, which is used by wcap).
 
+Claude Code plugin
+------------------
+
+This repo is also a [Claude Code](https://claude.com/claude-code) plugin marketplace. The `greenshot` plugin adds skills
+that teach Claude to take screenshots with `greenshot-cli` (`take-screenshot`) and to build & configure Greenshot (`setup-greenshot`):
+
+    /plugin marketplace add santimorenodi/greenshot
+    /plugin install greenshot@greenshot
+
+The plugin only contains instructions; `greenshot-cli.exe` must be built (see `setup-greenshot`) and be on `PATH`,
+in `GREENSHOT_CLI`, or in `src/Greenshot/bin/Release/net480/`.
+
 Getting Started for Developers:
 -------------------------------
 
