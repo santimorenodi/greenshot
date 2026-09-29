@@ -84,6 +84,7 @@ internal static class Native
     [DllImport("user32.dll")] private static extern bool GetWindowPlacement(IntPtr hWnd, ref WINDOWPLACEMENT placement);
     [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
     [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr hWnd);
+    [DllImport("user32.dll")] public static extern bool IsZoomed(IntPtr hWnd);
     [DllImport("user32.dll")] public static extern IntPtr GetWindow(IntPtr hWnd, uint command);
     [DllImport("user32.dll")] public static extern IntPtr GetAncestor(IntPtr hWnd, uint flags);
     [DllImport("user32.dll", EntryPoint = "GetWindowLongW")] private static extern int GetWindowLong(IntPtr hWnd, int index);

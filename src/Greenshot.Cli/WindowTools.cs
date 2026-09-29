@@ -369,6 +369,17 @@ internal static class WindowCapturer
     private static Point ImageOrigin(Image image, IntPtr handle, Rectangle frame, bool gdi)
     {
         Rectangle full = Native.GetWindowRectangle(handle);
+        // captures are cut at the edges of the screen: a maximized window has its frame a few pixels outside of it
+        Rectangle onScreen = Rectangle.Intersect(frame, SystemInformation.VirtualScreen);
+        if (onScreen != frame && onScreen.Width > 0 && image.Size == onScreen.Size)
+        {
+            return onScreen.Location;
+        }
+        if (gdi && Native.IsZoomed(handle) && image.Width < full.Width && image.Height < full.Height)
+        {
+            // PrintWindow of a maximized window: the capture code cuts the borders that are off the screen on every side
+            return new Point(full.X + (full.Width - image.Width) / 2, full.Y + (full.Height - image.Height) / 2);
+        }
         if (image.Size == full.Size && image.Size != frame.Size)
         {
             return full.Location;
