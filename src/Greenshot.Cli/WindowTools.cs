@@ -348,10 +348,14 @@ internal static class WindowCapturer
         finally
         {
             WindowDetails.NoActivate = false;
-            if (noActivate && Native.GetForegroundWindow() != previousForeground && request.RestoreBehind)
+            // only when the restored window itself took the focus: if the user switched to another window in the meantime,
+            // that is their choice and must not be undone
+            IntPtr foreground = Native.GetForegroundWindow();
+            if (request.RestoreBehind && foreground != previousForeground && foreground != IntPtr.Zero
+                && Native.ProcessId(foreground) == Native.ProcessId(handle))
             {
                 Native.ReturnFocus(previousForeground);
-                Console.Error.WriteLine("warning: the focus moved while the window was restored, it was given back");
+                Console.Error.WriteLine("warning: the restored window took the focus, it was given back");
             }
         }
     }
