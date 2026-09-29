@@ -136,6 +136,10 @@ The user keeps working in other windows while you capture.
 greenshot-cli.exe capture --window-pid 49656 --no-activate --mode aero -o "C:\tmp\a.png"
 ```
 
+`aero` (and so `auto` on Windows 11) briefly shows a topmost copy of the window on the screen to copy it: no focus
+is taken, but it flashes, which is annoying for the user if you take several captures in a row. For series of
+captures, or when the user is working, use `--mode gdi` (PrintWindow, shows nothing) and take only the captures you need.
+
 Checked with the Unreal editor (`aero` and `gdi` give the whole window with the viewport, also behind other applications)
 and with Edge.
 
