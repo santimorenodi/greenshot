@@ -98,7 +98,7 @@ Claude Code plugin
 ------------------
 
 This repo is also a [Claude Code](https://claude.com/claude-code) plugin marketplace. The `greenshot` plugin adds skills
-that teach Claude to take screenshots with `greenshot-cli` (`take-screenshot`), to annotate them (`annotate-screenshot`)
+that teach Claude to take, annotate and compare screenshots with `greenshot-cli` (`screenshot`)
 and to build & configure Greenshot (`setup-greenshot`):
 
     /plugin marketplace add santimorenodi/greenshot
