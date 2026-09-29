@@ -17,6 +17,7 @@ greenshot-cli.exe edit "C:\path\in.png" [annotations] -o "C:\path\out.png"      
 ```
 
 `edit` reads png, jpg, bmp, gif, tiff and `.greenshot`; without `-o` it overwrites the input.
+`--json` (on `capture`, `edit`, `combine`, `diff`) prints one line of JSON with `path`, `width`, `height`.
 
 ## Workflow
 
@@ -26,6 +27,40 @@ greenshot-cli.exe edit "C:\path\in.png" [annotations] -o "C:\path\out.png"      
 2. Write the annotations. They are applied **in the order given**, so crop first if you crop: after
    `--crop` the coordinates of the following elements are relative to the cropped image.
 3. Read the result and fix positions if something is off. Iterate on a copy, not the original.
+
+## Place annotations without guessing
+
+Do not place rectangles by eye on a scaled preview. Make a copy with a grid and the coordinates written on it:
+
+```bash
+greenshot-cli.exe edit "C:\tmp\raw.png" --grid 100 -o "C:\tmp\grid.png"
+```
+
+Read the coordinates off `grid.png` (lines every 100 px, numbers on the edges and, from a step of 100, on every
+crossing), then annotate `raw.png` (the grid is only a copy, the original is never touched; without `-o` it writes
+`raw.grid.png`). For a preview of the result use `--preview "C:\tmp\small.png" --preview-max 1400`, the saved image
+keeps its full resolution.
+
+For things at the edges of the image, use `--anchor` instead of measuring. It is sticky like the style, applies to
+the X,Y of the elements that follow and means "distance from that edge or corner (from the center for `center`) to
+the same edge or corner of the element":
+
+```bash
+# label at the bottom left, 10 px from the edges, whatever the size of the image or of the text
+greenshot-cli.exe edit raw.png -o out.png --font-size 20 --anchor bottom-left --text 10,10 "Before"
+# 300x40 box centered at the top, 12 px from the top edge
+greenshot-cli.exe edit raw.png -o out.png --anchor top --rect 0,12,300,40
+```
+
+`top-left` (default), `top`, `top-right`, `left`, `center`, `right`, `bottom-left`, `bottom`, `bottom-right`.
+
+A label glued to a shape: `--label "text"` right after `--rect`, `--ellipse`, `--line`, `--arrow`, `--text` or `--step`
+puts a text above its top left corner, filled with the color of the shape (inside when there is no room above;
+`--label-pos above|below|inside`):
+
+```bash
+greenshot-cli.exe edit raw.png -o out.png --color "#E53935" --thickness 3 --rect 100,150,200,100 --label "Broken"
+```
 
 ## Elements
 
@@ -86,6 +121,30 @@ greenshot-cli.exe edit "C:\tmp\raw.png" -o "C:\tmp\howto.png" \
   --bubble 760,460,300,70,700,430 "Then press Save" \
   --drop-shadow
 ```
+
+## Before and after side by side
+
+```bash
+greenshot-cli.exe combine before.png after.png -o "C:\tmp\both.png" --hstack --width 800 --labels "Before" "After"
+```
+
+`--hstack` (default), `--vstack` or `--grid COLUMNS`; `--gap N` (default 8), `--gap-color C`, `--width N` scales every
+image to that width keeping its proportions (one `--labels` text per image, drawn in its top left corner as Greenshot text
+with the style arguments `--font-size`, `--color`, `--fill`, `--bold`, ... given anywhere; white bold on dark by default).
+The result is an ordinary image: annotate it with `edit` afterwards. `--preview`, `--json` and annotations work
+on `combine` too. No ffmpeg needed.
+
+## What changed between two images
+
+```bash
+greenshot-cli.exe diff before.png after.png -o "C:\tmp\marked.png" --threshold 30 --json
+# {"path":"...","width":1280,"height":720,"changed_pixels":5321,"changed_percent":0.5773,"rects":[{"x":100,"y":80,"width":62,"height":42}]}
+```
+
+Draws Greenshot rectangles (red, 3 px; `--color`, `--thickness` change that) around the areas that changed on
+`after.png`. `--threshold N` (0-255, default 24) how much a pixel has to change, `--min-area N` (default 64) ignores
+small areas, `--merge N` (default 12) joins areas closer than N pixels. The two images need the same size, otherwise it
+is an error. With `--json` the rectangles are the list to use in the next `edit` (for example `--rect`).
 
 ## Notes
 

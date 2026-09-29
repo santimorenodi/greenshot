@@ -749,12 +749,10 @@ namespace Greenshot.Base.Core
             bool tempFormShown = false;
             try
             {
-                tempForm = new Form
-                {
-                    ShowInTaskbar = false,
-                    FormBorderStyle = FormBorderStyle.None,
-                    TopMost = true
-                };
+                tempForm = NoActivate ? new NoActivateForm() : new Form();
+                tempForm.ShowInTaskbar = false;
+                tempForm.FormBorderStyle = FormBorderStyle.None;
+                tempForm.TopMost = true;
 
                 // Register the Thumbnail
                 DwmApi.DwmRegisterThumbnail(tempForm.Handle, Handle, out thumbnailHandle);
@@ -1140,11 +1138,43 @@ namespace Greenshot.Base.Core
         }
 
         /// <summary>
+        /// When true, capturing never activates or brings a window to the foreground (used by greenshot-cli --no-activate):
+        /// ToForeground does nothing and the temporary DWM thumbnail form is shown without taking focus.
+        /// </summary>
+        public static bool NoActivate { get; set; }
+
+        /// <summary>
+        /// Topmost form for the DWM thumbnail that does not take the focus when it is shown
+        /// </summary>
+        private sealed class NoActivateForm : Form
+        {
+            private const int WS_EX_TOOLWINDOW = 0x00000080;
+            private const int WS_EX_NOACTIVATE = 0x08000000;
+
+            protected override bool ShowWithoutActivation => true;
+
+            protected override CreateParams CreateParams
+            {
+                get
+                {
+                    var createParams = base.CreateParams;
+                    createParams.ExStyle |= WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW;
+                    return createParams;
+                }
+            }
+        }
+
+        /// <summary>
         /// Set the window as foreground window
         /// </summary>
         /// <param name="hWnd">hWnd of the window to bring to the foreground</param>
         public static void ToForeground(IntPtr hWnd)
         {
+            if (NoActivate)
+            {
+                return;
+            }
+
             var foregroundWindow = User32Api.GetForegroundWindow();
             if (hWnd == foregroundWindow)
             {
