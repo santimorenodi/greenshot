@@ -209,7 +209,7 @@ internal static class WindowCapturer
         // menus and combos of the application close when it loses the focus, so popups always mean "do not activate"
         bool noActivate = request.NoActivate || request.RestoreBehind || request.IncludePopups;
 
-        if (minimized && !request.RestoreBehind && request.NoActivate)
+        if (minimized && !request.RestoreBehind && noActivate)
         {
             throw new CliException($"window \"{selected.Text}\" is minimized and cannot be captured without restoring and activating it; " +
                                    "use --restore-behind to restore it behind the other windows, or leave out --no-activate");
@@ -220,13 +220,14 @@ internal static class WindowCapturer
         {
             Image image;
             Rectangle imageOrigin;
+            Rectangle restoredClient = Rectangle.Empty;
             string mode;
             var popupImages = new List<(Image Image, Rectangle Rect)>();
             Rectangle frame;
 
             if (minimized && request.RestoreBehind)
             {
-                (image, imageOrigin, frame) = CaptureMinimized(selected, request.SettleMs);
+                (image, imageOrigin, frame, restoredClient) = CaptureMinimized(selected, request.SettleMs);
                 mode = "printwindow";
             }
             else
@@ -237,8 +238,9 @@ internal static class WindowCapturer
                     resolved = ResolveMode(process, request.Mode);
                 }
                 mode = resolved.ToString().ToLowerInvariant();
-                if (resolved == WindowCaptureMode.Screen && !minimized)
+                if (resolved == WindowCaptureMode.Screen && !minimized && noActivate)
                 {
+                    // without --no-activate the window is raised before the screen is copied, so there is nothing to warn about
                     WarnIfCovered(selected);
                 }
 
@@ -247,7 +249,7 @@ internal static class WindowCapturer
                 var captured = WindowCaptureHelper.CaptureWindow(selected, capture, request.Mode);
                 image = captured?.Image ?? throw new CliException("capture failed");
                 frame = Native.GetFrameRectangle(handle);
-                imageOrigin = new Rectangle(ImageOrigin(image.Size, handle, frame), image.Size);
+                imageOrigin = new Rectangle(ImageOrigin(image, handle, frame, resolved == WindowCaptureMode.GDI), image.Size);
 
                 if (request.IncludePopups)
                 {
@@ -260,7 +262,7 @@ internal static class WindowCapturer
                             continue;
                         }
                         Rectangle popupFrame = Native.GetFrameRectangle(popup);
-                        var origin = ImageOrigin(popupResult.Image.Size, popup, popupFrame);
+                        var origin = ImageOrigin(popupResult.Image, popup, popupFrame, false);
                         popupImages.Add((popupResult.Image, new Rectangle(origin, popupResult.Image.Size)));
                     }
                 }
@@ -290,10 +292,11 @@ internal static class WindowCapturer
 
                 // what to keep of it, in screen coordinates
                 Rectangle keep = canvasRect;
-                Rectangle client = minimized && !request.RestoreBehind ? Rectangle.Empty : Native.GetClientRectangleOnScreen(handle);
+                // a window that was restored only for the capture is minimized again by now, its client area was read while it was restored
+                Rectangle client = minimized ? restoredClient : Native.GetClientRectangleOnScreen(handle);
                 if (request.Client)
                 {
-                    if (client.IsEmpty)
+                    if (client.Width <= 0 || client.Height <= 0)
                     {
                         throw new CliException("cannot get the client area of the window");
                     }
@@ -308,7 +311,8 @@ internal static class WindowCapturer
                 if (request.Client || request.Region.HasValue)
                 {
                     Rectangle clipped = Rectangle.Intersect(keep, canvasRect);
-                    if (clipped.IsEmpty)
+                    // Intersect gives a rectangle without area, but not an empty one, when the rectangles only touch
+                    if (clipped.Width <= 0 || clipped.Height <= 0)
                     {
                         throw new CliException(request.Region.HasValue
                             ? $"--region is outside of the captured {(request.Client ? "client area" : "window")} ({canvasRect.Width}x{canvasRect.Height})"
@@ -354,16 +358,41 @@ internal static class WindowCapturer
 
     /// <summary>
     /// The screen position of the top left corner of an image that was captured of a window: the visible frame, or the whole
-    /// window rectangle with its invisible borders (what PrintWindow renders)
+    /// window rectangle with its invisible borders (what PrintWindow renders). GDI mode is PrintWindow, but the capture code
+    /// replaces its result with a copy of the screen when that looks better, so in that mode the strip of the invisible
+    /// border is looked at: PrintWindow leaves it black or transparent.
     /// </summary>
-    private static Point ImageOrigin(Size imageSize, IntPtr handle, Rectangle frame)
+    private static Point ImageOrigin(Image image, IntPtr handle, Rectangle frame, bool gdi)
     {
         Rectangle full = Native.GetWindowRectangle(handle);
-        if (imageSize != frame.Size && imageSize == full.Size)
+        if (image.Size == full.Size && image.Size != frame.Size)
+        {
+            return full.Location;
+        }
+        int border = frame.X - full.X;
+        if (gdi && border > 2 && image.Size == frame.Size && image is Bitmap bitmap && StripIsBlank(bitmap, border, frame.Y - full.Y))
         {
             return full.Location;
         }
         return frame.Location;
+    }
+
+    private static bool StripIsBlank(Bitmap image, int width, int topBorder)
+    {
+        // the left strip below the top border: nothing there but black or transparent pixels
+        int y0 = Math.Min(image.Height - 1, Math.Max(topBorder + 1, 0));
+        for (int y = y0; y < image.Height; y += Math.Max(1, image.Height / 32))
+        {
+            for (int x = 0; x < Math.Min(width - 1, image.Width); x++)
+            {
+                var pixel = image.GetPixel(x, y);
+                if (pixel.A != 0 && (pixel.R > 8 || pixel.G > 8 || pixel.B > 8))
+                {
+                    return false;
+                }
+            }
+        }
+        return true;
     }
 
     /// <summary>
@@ -498,7 +527,7 @@ internal static class WindowCapturer
     /// Restore a minimized window without activating it, behind everything else, let it paint, grab it with PrintWindow and
     /// minimize it again
     /// </summary>
-    private static (Image Image, Rectangle Origin, Rectangle Frame) CaptureMinimized(WindowDetails window, int settleMs)
+    private static (Image Image, Rectangle Origin, Rectangle Frame, Rectangle Client) CaptureMinimized(WindowDetails window, int settleMs)
     {
         IntPtr handle = window.Handle;
         Native.ShowWindow(handle, Native.SW_SHOWNOACTIVATE);
@@ -527,8 +556,9 @@ internal static class WindowCapturer
 
             Rectangle full = Native.GetWindowRectangle(handle);
             Rectangle frame = Native.GetFrameRectangle(handle);
+            Rectangle client = Native.GetClientRectangleOnScreen(handle);
             Image image = new WindowDetails(handle).PrintWindow() ?? throw new CliException("PrintWindow returned nothing for the window");
-            return (image, new Rectangle(full.Location, image.Size), frame);
+            return (image, new Rectangle(full.Location, image.Size), frame, client);
         }
         finally
         {

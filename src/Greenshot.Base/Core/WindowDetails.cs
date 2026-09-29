@@ -668,6 +668,12 @@ namespace Greenshot.Base.Core
         /// </summary>
         public void Restore()
         {
+            if (NoActivate)
+            {
+                // restoring activates the window
+                return;
+            }
+
             if (Iconic)
             {
                 User32Api.SendMessage(Handle, WindowsMessages.WM_SYSCOMMAND, SysCommands.SC_RESTORE, IntPtr.Zero);
@@ -752,7 +758,10 @@ namespace Greenshot.Base.Core
                 tempForm = NoActivate ? new NoActivateForm() : new Form();
                 tempForm.ShowInTaskbar = false;
                 tempForm.FormBorderStyle = FormBorderStyle.None;
-                tempForm.TopMost = true;
+                if (!NoActivate)
+                {
+                    tempForm.TopMost = true;
+                }
 
                 // Register the Thumbnail
                 DwmApi.DwmRegisterThumbnail(tempForm.Handle, Handle, out thumbnailHandle);
@@ -1148,6 +1157,7 @@ namespace Greenshot.Base.Core
         /// </summary>
         private sealed class NoActivateForm : Form
         {
+            private const int WS_EX_TOPMOST = 0x00000008;
             private const int WS_EX_TOOLWINDOW = 0x00000080;
             private const int WS_EX_NOACTIVATE = 0x08000000;
 
@@ -1158,7 +1168,8 @@ namespace Greenshot.Base.Core
                 get
                 {
                     var createParams = base.CreateParams;
-                    createParams.ExStyle |= WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW;
+                    // topmost through the style: Form.TopMost = true makes Show() give the form the focus
+                    createParams.ExStyle |= WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_TOPMOST;
                     return createParams;
                 }
             }

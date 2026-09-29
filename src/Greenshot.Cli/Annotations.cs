@@ -187,6 +187,8 @@ internal sealed class Annotations
                 break;
             case "--crop":
                 var crop = Rect(Next("X,Y,W,H"));
+                // positions before the crop are not positions after it
+                _lastShape = null;
                 _operations.Add(s =>
                 {
                     if (!s.ApplyCrop(crop))
@@ -420,9 +422,11 @@ internal sealed class Annotations
     private static void RememberShape(ShapeRef shape, DrawableContainer element, Rectangle rect)
     {
         shape.Rect = rect;
-        if (element.HasField(FieldType.LINE_COLOR))
+        // the color of a step label is its circle, the line color is the one of its number
+        var colorField = element is StepLabelContainer ? FieldType.FILL_COLOR : FieldType.LINE_COLOR;
+        if (element.HasField(colorField))
         {
-            shape.Color = element.GetFieldValueAsColor(FieldType.LINE_COLOR);
+            shape.Color = element.GetFieldValueAsColor(colorField);
         }
     }
 

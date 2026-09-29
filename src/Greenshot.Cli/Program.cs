@@ -135,8 +135,10 @@ internal static class Program
         "\n" +
         "diff:\n" +
         "  --threshold N         how much a pixel has to change (0-255, largest channel difference, default 24)\n" +
-        "  --min-area N          ignore changed areas smaller than N square pixels (default 64)\n" +
-        "  --merge N             changed areas closer than N pixels become one rectangle (default 12)\n" +
+        "  --min-area N          ignore changed areas whose rectangle is smaller than N square pixels (default 64)\n" +
+        "  --merge N             changed areas closer than about N pixels become one rectangle (default 12); changes are\n" +
+        "                        collected in blocks of 8 pixels, so anything closer than 8 to 15 pixels is always one\n" +
+        "                        rectangle\n" +
         "  the rectangles are drawn as Greenshot rectangles on AFTER (red, 3 px; --color and --thickness change that), the\n" +
         "  images need the same size, --json also lists the rectangles\n" +
         "                        example: greenshot-cli diff before.png after.png -o marked.png --threshold 30 --json\n" +
@@ -288,6 +290,15 @@ internal static class Program
             {
                 throw new CliException("use only one of --preview-width and --preview-max");
             }
+            if (Preview != null)
+            {
+                // fail before anything is written
+                string extension = Path.GetExtension(Preview).TrimStart('.').ToLowerInvariant();
+                if (!(string.IsNullOrEmpty(extension) || extension is "png" or "jpg" or "jpeg" or "bmp" or "gif" or "tif" or "tiff"))
+                {
+                    throw new CliException($"a preview is an image, use png, jpg, bmp, gif or tiff, not {extension}");
+                }
+            }
         }
     }
 
@@ -311,7 +322,8 @@ internal static class Program
             }
             else
             {
-                throw new CliException($"unknown argument: {arg}");
+                // 'list' has always ignored what it does not know
+                Console.Error.WriteLine($"warning: list ignores {arg}");
             }
         }
 
@@ -366,6 +378,7 @@ internal static class Program
         int settle = 500;
         var output = new OutputOptions();
         var annotations = new Annotations();
+        var seenTargets = new HashSet<string>();
 
         for (int i = 0; i < args.Length; i++)
         {
@@ -381,6 +394,12 @@ internal static class Program
                     throw new CliException($"{arg} requires a value");
                 }
                 return args[++i];
+            }
+
+            // giving the same target twice was always an error
+            if (arg is "--fullscreen" or "--active" or "--monitor" or "--window" or "--window-pid" or "--window-exe" or "--region" && !seenTargets.Add(arg))
+            {
+                throw new CliException("use only one of --fullscreen, --monitor, --active, --window or --region");
             }
 
             switch (arg)

@@ -142,8 +142,9 @@ greenshot-cli.exe diff before.png after.png -o "C:\tmp\marked.png" --threshold 3
 ```
 
 Draws Greenshot rectangles (red, 3 px; `--color`, `--thickness` change that) around the areas that changed on
-`after.png`. `--threshold N` (0-255, default 24) how much a pixel has to change, `--min-area N` (default 64) ignores
-small areas, `--merge N` (default 12) joins areas closer than N pixels. The two images need the same size, otherwise it
+`after.png`. `--threshold N` (0-255, default 24) how much a pixel has to change, `--min-area N` (default 64, area of the
+rectangle) ignores small areas, `--merge N` (default 12) joins areas closer than about N pixels (changes are collected in blocks
+of 8 px, so areas closer than 8-15 px are always one rectangle). The two images need the same size, otherwise it
 is an error. With `--json` the rectangles are the list to use in the next `edit` (for example `--rect`).
 
 ## Notes
