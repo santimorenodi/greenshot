@@ -56,6 +56,8 @@ internal sealed class Annotations
         "  --grayscale-area X,Y,W,H    grayscale the rest   --magnify X,Y,W,H       magnifier\n" +
         "  --pixelate X,Y,W,H          pixelate area        --blur X,Y,W,H          blur area\n" +
         "  --crop X,Y,W,H              crop the image (elements move along)\n" +
+        "  --label TEXT                label glued to the shape right before it (above its top left corner, filled with the\n" +
+        "                              color of the shape), e.g. --color red --rect 40,60,200,80 --label \"Broken\"\n" +
         "\n" +
         "style (applies to the shapes and text that follow it, not to highlight/magnify/pixelate/blur):\n" +
         "  --color C                   line/text color: name (red), #RRGGBB or #AARRGGBB\n" +
@@ -65,12 +67,37 @@ internal sealed class Annotations
         "  --shadow, --no-shadow       element shadow\n" +
         "  --heads end|start|both|none arrow heads\n" +
         "  --pixel-size N, --blur-radius N, --magnification N\n" +
+        "  --label-pos above|below|inside   where --label goes (default above, inside when there is no room)\n" +
+        "  --anchor A                  what the X,Y of the following elements are relative to: top-left (default), top,\n" +
+        "                              top-right, left, center, right, bottom-left, bottom, bottom-right. X,Y is the distance\n" +
+        "                              from that edge/corner (from the center for center) to the same edge/corner of the\n" +
+        "                              element, e.g. --anchor bottom-left --text 10,10 \"Before\" puts the text 10 pixels from\n" +
+        "                              the left and bottom edge of the image, without measuring anything\n" +
         "\n" +
         "effects on the final image (in the order given, not with a .greenshot output):\n" +
         "  --border, --drop-shadow, --torn-edge, --grayscale, --invert\n" +
         "  --rotate 90|180|270, --resize W,H (keeps aspect ratio if W or H is 0), --scale PERCENT\n" +
         "\n" +
         "output .greenshot keeps every element editable in the Greenshot editor.\n";
+
+    private enum Anchor
+    {
+        TopLeft, Top, TopRight, Left, Center, Right, BottomLeft, Bottom, BottomRight
+    }
+
+    private enum LabelPosition
+    {
+        Above, Below, Inside
+    }
+
+    /// <summary>
+    /// The last shape that was added, filled in when the shape is drawn, so --label can stick to it
+    /// </summary>
+    private sealed class ShapeRef
+    {
+        public Rectangle Rect;
+        public Color Color = Color.Red;
+    }
 
     private readonly List<Action<Surface>> _operations = new();
     private readonly List<Func<Image, IEffect>> _effects = new();
@@ -88,6 +115,9 @@ internal sealed class Annotations
     private int? _pixelSize;
     private int? _blurRadius;
     private int? _magnification;
+    private Anchor _anchor = Anchor.TopLeft;
+    private LabelPosition _labelPosition = LabelPosition.Above;
+    private ShapeRef _lastShape;
 
     public bool HasOperations => _operations.Count > 0 || _effects.Count > 0;
     public bool HasEffects => _effects.Count > 0;
@@ -157,6 +187,8 @@ internal sealed class Annotations
                 break;
             case "--crop":
                 var crop = Rect(Next("X,Y,W,H"));
+                // positions before the crop are not positions after it
+                _lastShape = null;
                 _operations.Add(s =>
                 {
                     if (!s.ApplyCrop(crop))
@@ -217,6 +249,35 @@ internal sealed class Annotations
                 break;
             case "--magnification":
                 _magnification = ParseInt(arg, Next("a number"), 1);
+                break;
+            case "--anchor":
+                string anchor = Next("top-left, top, top-right, left, center, right, bottom-left, bottom or bottom-right");
+                _anchor = anchor.ToLowerInvariant() switch
+                {
+                    "top-left" => Anchor.TopLeft,
+                    "top" => Anchor.Top,
+                    "top-right" => Anchor.TopRight,
+                    "left" => Anchor.Left,
+                    "center" => Anchor.Center,
+                    "right" => Anchor.Right,
+                    "bottom-left" => Anchor.BottomLeft,
+                    "bottom" => Anchor.Bottom,
+                    "bottom-right" => Anchor.BottomRight,
+                    _ => throw new CliException($"--anchor expects top-left, top, top-right, left, center, right, bottom-left, bottom or bottom-right, not {anchor}")
+                };
+                break;
+            case "--label-pos":
+                string labelPosition = Next("above, below or inside");
+                _labelPosition = labelPosition.ToLowerInvariant() switch
+                {
+                    "above" => LabelPosition.Above,
+                    "below" => LabelPosition.Below,
+                    "inside" => LabelPosition.Inside,
+                    _ => throw new CliException($"--label-pos expects above, below or inside, not {labelPosition}")
+                };
+                break;
+            case "--label":
+                AddLabel(Next("the text"));
                 break;
 
             // effects
@@ -297,28 +358,76 @@ internal sealed class Annotations
 
     // --- elements ------------------------------------------------------------
 
+    /// <summary>
+    /// Top left corner of an element of the given size whose X,Y is relative to the current anchor
+    /// </summary>
+    private static Point Place(Anchor anchor, Size image, int x, int y, int width, int height)
+    {
+        int left = anchor switch
+        {
+            Anchor.TopLeft or Anchor.Left or Anchor.BottomLeft => x,
+            Anchor.Top or Anchor.Center or Anchor.Bottom => (image.Width - width) / 2 + x,
+            _ => image.Width - width - x
+        };
+        int top = anchor switch
+        {
+            Anchor.TopLeft or Anchor.Top or Anchor.TopRight => y,
+            Anchor.Left or Anchor.Center or Anchor.Right => (image.Height - height) / 2 + y,
+            _ => image.Height - height - y
+        };
+        return new Point(left, top);
+    }
+
     private void AddDrag(NativeRect rect, Func<Surface, DrawableContainer> create) =>
-        AddDrawn(create, rect.Left, rect.Top, rect.Right, rect.Bottom);
+        AddBox(rect.Left, rect.Top, rect.Width, rect.Height, create);
 
     private void AddLine(string value, Func<Surface, DrawableContainer> create)
     {
         var p = Ints("--line/--arrow", value, 4);
-        AddDrawn(create, p[0], p[1], p[2], p[3]);
-    }
-
-    /// <summary>
-    /// Draw an element like the editor does while dragging from (x1,y1) to (x2,y2)
-    /// </summary>
-    private void AddDrawn(Func<Surface, DrawableContainer> create, int x1, int y1, int x2, int y2, Action<DrawableContainer> after = null)
-    {
         var style = Snapshot();
+        var anchor = _anchor;
+        var shape = new ShapeRef();
+        _lastShape = shape;
         _operations.Add(surface =>
         {
             var element = create(surface);
             style(element);
-            Draw(surface, element, x1, y1, x2, y2);
-            after?.Invoke(element);
+            var from = Place(anchor, surface.Image.Size, p[0], p[1], 0, 0);
+            var to = Place(anchor, surface.Image.Size, p[2], p[3], 0, 0);
+            Draw(surface, element, from.X, from.Y, to.X, to.Y);
+            RememberShape(shape, element, Rectangle.FromLTRB(Math.Min(from.X, to.X), Math.Min(from.Y, to.Y), Math.Max(from.X, to.X), Math.Max(from.Y, to.Y)));
         });
+    }
+
+    /// <summary>
+    /// Draw an element like the editor does while dragging over the box, the box is placed relative to the current anchor
+    /// </summary>
+    private void AddBox(int x, int y, int width, int height, Func<Surface, DrawableContainer> create, Action<DrawableContainer, Surface, Point> after = null)
+    {
+        var style = Snapshot();
+        var anchor = _anchor;
+        var shape = new ShapeRef();
+        _lastShape = shape;
+        _operations.Add(surface =>
+        {
+            var element = create(surface);
+            style(element);
+            var origin = Place(anchor, surface.Image.Size, x, y, width, height);
+            Draw(surface, element, origin.X, origin.Y, origin.X + width, origin.Y + height);
+            after?.Invoke(element, surface, origin);
+            RememberShape(shape, element, new Rectangle(origin.X, origin.Y, width, height));
+        });
+    }
+
+    private static void RememberShape(ShapeRef shape, DrawableContainer element, Rectangle rect)
+    {
+        shape.Rect = rect;
+        // the color of a step label is its circle, the line color is the one of its number
+        var colorField = element is StepLabelContainer ? FieldType.FILL_COLOR : FieldType.LINE_COLOR;
+        if (element.HasField(colorField))
+        {
+            shape.Color = element.GetFieldValueAsColor(colorField);
+        }
     }
 
     private static void Draw(Surface surface, DrawableContainer element, int x1, int y1, int x2, int y2)
@@ -345,19 +454,22 @@ internal sealed class Annotations
             throw new CliException("--freehand needs at least two points: X,Y;X,Y;...");
         }
         var style = Snapshot();
+        var anchor = _anchor;
+        _lastShape = null;
         _operations.Add(surface =>
         {
+            var placed = points.Select(point => Place(anchor, surface.Image.Size, point[0], point[1], 0, 0)).ToList();
             var element = new FreehandContainer(surface);
             style(element);
             element.Status = element.DefaultEditMode;
-            element.HandleMouseDown(points[0][0], points[0][1]);
+            element.HandleMouseDown(placed[0].X, placed[0].Y);
             surface.AddElement(element, false, false);
-            foreach (var point in points.Skip(1))
+            foreach (var point in placed.Skip(1))
             {
-                element.HandleMouseMove(point[0], point[1]);
+                element.HandleMouseMove(point.X, point.Y);
             }
-            var last = points[points.Count - 1];
-            element.HandleMouseUp(last[0], last[1]);
+            var last = placed[placed.Count - 1];
+            element.HandleMouseUp(last.X, last.Y);
             element.Status = EditStatus.IDLE;
         });
     }
@@ -367,29 +479,82 @@ internal sealed class Annotations
         var p = Ints("--text", position, 2, 4);
         if (p.Length == 4)
         {
-            AddDrawn(s => new TextContainer(s), p[0], p[1], p[0] + p[2], p[1] + p[3], e => ((TextContainer) e).Text = text);
+            AddBox(p[0], p[1], p[2], p[3], s => new TextContainer(s), (e, _, __) => ((TextContainer) e).Text = text);
             return;
         }
 
         var style = Snapshot();
+        var anchor = _anchor;
+        var shape = new ShapeRef();
+        _lastShape = shape;
         _operations.Add(surface =>
         {
             var element = new TextContainer(surface) { Left = p[0], Top = p[1] };
             style(element);
             element.Text = text;
             element.FitToText();
+            // the size is only known now, so this is where the anchor can be applied
+            var origin = Place(anchor, surface.Image.Size, p[0], p[1], element.Width, element.Height);
+            element.Left = origin.X;
+            element.Top = origin.Y;
             surface.AddElement(element, false, false);
+            RememberShape(shape, element, new Rectangle(origin.X, origin.Y, element.Width, element.Height));
         });
+    }
+
+    /// <summary>
+    /// A caption at an image position (anchor top-left), used for the labels of 'combine': white bold text on a dark
+    /// background unless the style arguments say otherwise
+    /// </summary>
+    internal void AddCaptionAt(int x, int y, string text)
+    {
+        var (anchor, color, fill, thickness, fontSize, bold) = (_anchor, _color, _fill, _thickness, _fontSize, _bold);
+        _anchor = Anchor.TopLeft;
+        _color ??= Color.White;
+        _fill ??= Color.FromArgb(200, 0, 0, 0);
+        _thickness ??= 0;
+        _fontSize ??= 20;
+        _bold ??= true;
+        try
+        {
+            AddText($"{x},{y}", text);
+        }
+        finally
+        {
+            (_anchor, _color, _fill, _thickness, _fontSize, _bold) = (anchor, color, fill, thickness, fontSize, bold);
+        }
+    }
+
+    /// <summary>
+    /// A rectangle around an area (image coordinates), used by 'diff': red with a 3 pixel line unless the style arguments say otherwise
+    /// </summary>
+    internal void AddMarker(Rectangle rect)
+    {
+        var (anchor, color, thickness) = (_anchor, _color, _thickness);
+        _anchor = Anchor.TopLeft;
+        _color ??= Color.Red;
+        _thickness ??= 3;
+        try
+        {
+            AddBox(rect.X, rect.Y, rect.Width, rect.Height, s => new RectangleContainer(s));
+        }
+        finally
+        {
+            (_anchor, _color, _thickness) = (anchor, color, thickness);
+        }
     }
 
     private void AddBubble(string position, string text)
     {
         var p = Ints("--bubble", position, 6);
-        AddDrawn(s => new SpeechbubbleContainer(s), p[0], p[1], p[0] + p[2], p[1] + p[3], e =>
+        var anchor = _anchor;
+        AddBox(p[0], p[1], p[2], p[3], s => new SpeechbubbleContainer(s), (e, surface, origin) =>
         {
             var bubble = (SpeechbubbleContainer) e;
             bubble.Text = text;
-            bubble.SetTailLocation(new NativePoint(p[4], p[5]));
+            // the tail is a point, relative to the same anchor as the box
+            var tail = Place(anchor, surface.Image.Size, p[4], p[5], 0, 0);
+            bubble.SetTailLocation(new NativePoint(tail.X, tail.Y));
         });
     }
 
@@ -401,19 +566,24 @@ internal sealed class Annotations
             throw new CliException($"--step size must be positive, got {p[2]}");
         }
         var style = Snapshot();
+        var anchor = _anchor;
+        var shape = new ShapeRef();
+        _lastShape = shape;
         _operations.Add(surface =>
         {
             var element = new StepLabelContainer(surface);
             style(element);
-            // placed with a click like in the editor, then resized as with its grippers
-            Draw(surface, element, p[0], p[1], p[0], p[1]);
+            // the label is centered at X,Y (relative to the anchor): placed with a click like in the editor, then resized as with its grippers
+            var center = Place(anchor, surface.Image.Size, p[0], p[1], 0, 0);
+            Draw(surface, element, center.X, center.Y, center.X, center.Y);
             if (p.Length == 3)
             {
                 element.Width = p[2];
                 element.Height = p[2];
             }
-            element.Left = p[0] - element.Width / 2;
-            element.Top = p[1] - element.Height / 2;
+            element.Left = center.X - element.Width / 2;
+            element.Top = center.Y - element.Height / 2;
+            RememberShape(shape, element, new Rectangle(element.Left, element.Top, element.Width, element.Height));
         });
     }
 
@@ -422,14 +592,61 @@ internal sealed class Annotations
         var rect = Rect(value);
         // Filters keep their editor defaults (no border), only the filter settings apply
         var style = Snapshot(filterOnly: true);
+        var anchor = _anchor;
+        _lastShape = null;
         _operations.Add(surface =>
         {
             var element = create(surface);
             element.SetFieldValue(presetField, preset);
             style(element);
-            Draw(surface, element, rect.Left, rect.Top, rect.Right, rect.Bottom);
+            var origin = Place(anchor, surface.Image.Size, rect.Left, rect.Top, rect.Width, rect.Height);
+            Draw(surface, element, origin.X, origin.Y, origin.X + rect.Width, origin.Y + rect.Height);
         });
     }
+
+    /// <summary>
+    /// A text stuck to the last shape: filled with the color of the shape, above its top left corner
+    /// (inside when there is no room, or where --label-pos says)
+    /// </summary>
+    private void AddLabel(string text)
+    {
+        var shape = _lastShape ?? throw new CliException("--label goes right after a shape (--rect, --ellipse, --line, --arrow, --text, --step)");
+        var style = Snapshot();
+        var position = _labelPosition;
+        bool fontSizeGiven = _fontSize.HasValue;
+        bool boldGiven = _bold.HasValue;
+        _operations.Add(surface =>
+        {
+            var label = new TextContainer(surface);
+            style(label);
+            if (!fontSizeGiven) label.SetFieldValue(FieldType.FONT_SIZE, 14f);
+            if (!boldGiven) label.SetFieldValue(FieldType.FONT_BOLD, true);
+            label.SetFieldValue(FieldType.FILL_COLOR, shape.Color);
+            label.SetFieldValue(FieldType.LINE_COLOR, ContrastColor(shape.Color));
+            label.SetFieldValue(FieldType.LINE_THICKNESS, 0);
+            label.SetFieldValue(FieldType.SHADOW, false);
+            label.Text = text;
+            label.FitToText();
+
+            int left = Math.Max(0, Math.Min(shape.Rect.Left, surface.Image.Width - label.Width));
+            int top = position switch
+            {
+                LabelPosition.Below => shape.Rect.Bottom,
+                LabelPosition.Inside => shape.Rect.Top,
+                _ => shape.Rect.Top - label.Height
+            };
+            if (position != LabelPosition.Inside && (top < 0 || top + label.Height > surface.Image.Height))
+            {
+                top = shape.Rect.Top;
+            }
+            label.Left = left;
+            label.Top = Math.Max(0, top);
+            surface.AddElement(label, false, false);
+        });
+    }
+
+    private static Color ContrastColor(Color background) =>
+        (background.R * 299 + background.G * 587 + background.B * 114) / 1000 > 150 ? Color.Black : Color.White;
 
     /// <summary>
     /// Freeze the current style, so later style arguments only affect later elements

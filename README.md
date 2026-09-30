@@ -49,14 +49,26 @@ Command line screenshots (greenshot-cli)
 Building the solution also produces `greenshot-cli.exe` next to `Greenshot.exe`. It takes screenshots with the Greenshot
 capture engine without any UI, uses default settings in memory (never touches greenshot.ini) and can run while Greenshot is running.
 
-    greenshot-cli list                                    monitors (index) and windows (handle, title)
+    greenshot-cli list [--json]                           monitors (index) and windows (handle, title, pid, exe, rectangles)
     greenshot-cli capture [target] [options]
 
     target:   --fullscreen (default) | --monitor N | --active | --window 0xHANDLE | --window "title" | --region X,Y,W,H
+              --window-pid N | --window-exe "D:\Godlike\*"   (combine with --window; several matches are an error that lists them)
+              with a window target --region is relative to the window (to its client area with --client)
     options:  -o FILE (png/jpg/bmp/gif/tiff from extension), --format F, --quality N, --delay SEC,
-              --mode auto|aero|aerotransparent|gdi|screen, --clipboard, --open (open in Greenshot editor)
+              --mode auto|aero|aerotransparent|gdi|screen, --clipboard, --open (open in Greenshot editor),
+              --preview FILE [--preview-width N | --preview-max N], --json
+    window:   --client, --include-popups (menus and tooltips of the window), --no-activate (never take the focus),
+              --restore-behind [--settle MS] (experimental: capture a minimized window without showing it)
 
-It prints `saved: PATH` and `size: WxH`, exit code is 0 on success.
+It prints `saved: PATH` and `size: WxH` (or one line of JSON with `--json`), exit code is 0 on success.
+All coordinates are physical pixels: the process is per-monitor DPI aware, so `list --json` and the capture agree at any
+display scaling. Run `greenshot-cli help` for every option with an example, and `src\Greenshot.Cli\Test-GreenshotCli.ps1`
+to check them against test windows.
+
+    greenshot-cli combine before.png after.png -o both.png --hstack --width 800 --labels "Before" "After"
+    greenshot-cli diff before.png after.png -o marked.png --json      rectangles where the images differ
+    greenshot-cli edit shot.png --grid 100 -o grid.png                copy with a coordinate grid, to place annotations
 
 It also annotates, with the Greenshot editor itself running headless: each element is drawn as if dragged with the
 mouse, so the result looks exactly like annotating in the editor. Annotations go after `capture`, or on any image with
@@ -72,6 +84,8 @@ mouse, so the result looks exactly like annotating in the editor. Annotations go
     effects:  --border, --drop-shadow, --torn-edge, --grayscale, --invert, --rotate N, --resize W,H, --scale PERCENT
 
 Style arguments apply to the elements after them. Saving to `.greenshot` keeps every element editable in Greenshot.
+`--anchor bottom-left|top-right|center|...` makes the X,Y that follow relative to an edge or corner of the image, and
+`--rect X,Y,W,H --label "text"` sticks a label filled with the color of the shape to it.
 
     greenshot-cli capture --active --crop 0,0,1280,760 --pixelate 860,20,300,32 --color #E53935 --thickness 4 ^
       --arrow 700,420,560,300 --step 700,430 --font-size 20 --bubble 760,460,300,70,700,430 "Then press Save" ^
@@ -84,7 +98,7 @@ Claude Code plugin
 ------------------
 
 This repo is also a [Claude Code](https://claude.com/claude-code) plugin marketplace. The `greenshot` plugin adds skills
-that teach Claude to take screenshots with `greenshot-cli` (`take-screenshot`), to annotate them (`annotate-screenshot`)
+that teach Claude to take, annotate and compare screenshots with `greenshot-cli` (`screenshot`)
 and to build & configure Greenshot (`setup-greenshot`):
 
     /plugin marketplace add santimorenodi/greenshot
