@@ -12,7 +12,7 @@
       "name": "greenshot",
       "source": "./claude-plugin",
       "description": "Take and annotate screenshots (arrows, text, steps, blur, crop...) on Windows with greenshot-cli",
-      "version": "1.1.0"
+      "version": "1.1.1"
     }
   ]
 }

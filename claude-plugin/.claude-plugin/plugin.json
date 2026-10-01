@@ -1,6 +1,6 @@
 {
   "name": "greenshot",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Skills for taking and annotating screenshots on Windows with greenshot-cli (Greenshot capture engine and editor, no UI) and building/configuring Greenshot",
   "author": {
     "name": "santimorenodi",
