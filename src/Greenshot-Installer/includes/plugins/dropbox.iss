@@ -1,5 +1,5 @@
 [Components]
-Name: "plugins\dropbox"; Description: {cm:dropbox}; Types: full custom; Flags: disablenouninstallwarning
+Name: "plugins\dropbox"; Description: {cm:dropbox}; Types: full; Flags: disablenouninstallwarning
 
 [Files]
 ; The plugin and the libraries only it uses; the build removed its copies of the files Greenshot itself installs

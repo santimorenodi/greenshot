@@ -19,6 +19,7 @@ dotnet build src/Greenshot.Managed.slnf -c Release
 ```
 
 - Build `src/Greenshot.Managed.slnf`, not `Greenshot.sln`: the solution also has upstream's native C++ projects (`greenshot-proxy`, its `greenshot.com`), which `dotnet build` cannot compile (`MSB4278 Microsoft.Cpp.Default.props`) and which need the Visual Studio 2026 C++ toolset (v145). The filter also leaves out the Inno Setup installer.
+- The filter also leaves out the "Upload to ..." plugins (Box, Confluence, Dropbox, Imgur, Jira) and `Greenshot.Tests`, which references them, so they are not in the output. Run tests with `dotnet test src/Greenshot.Tests -c Release`.
 - Success = `0 Errores` / `0 Error(s)`. Warnings are expected.
 - Output: `src/Greenshot/bin/Release/net480/` with `Greenshot.exe`, `greenshot-cli.exe` and the plugins.
 - Use `dotnet build`, not Visual Studio 2022's MSBuild: older VS MSBuild versions cannot resolve the pinned SDK (`Microsoft.NET.Sdk.WindowsDesktop` not found).

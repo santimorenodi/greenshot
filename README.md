@@ -94,6 +94,10 @@ Style arguments apply to the elements after them. Saving to `.greenshot` keeps e
 Default hotkeys in this fork: region `PrintScreen`, window `Alt + PrintScreen`, last region `Shift + PrintScreen`,
 fullscreen `Ctrl + Alt + PrintScreen` (moved from `Ctrl + PrintScreen`, which is used by wcap).
 
+The "Upload to ..." plugins (Box, Confluence, Dropbox, Imgur, Jira) are not installed by default in this fork:
+`dotnet build src/Greenshot.Managed.slnf` leaves them (and the tests that reference them) out, and the installer only
+includes them in the "full" installation type. Build `src/Greenshot.sln` or pick them in the installer to get them back.
+
 Claude Code plugin
 ------------------
 
