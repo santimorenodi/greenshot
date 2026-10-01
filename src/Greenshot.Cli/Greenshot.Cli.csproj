@@ -7,6 +7,8 @@
     <!-- Same manifest as Greenshot.exe: per-monitor DPI awareness, so coordinates are physical pixels -->
     <ApplicationManifest>..\Greenshot\greenshot.manifest</ApplicationManifest>
     <IsPackable>false</IsPackable>
+    <!-- Synchronous console tool: blocking waits, Thread.Sleep and message pumping are intended here (RS0030 = banned API list for the UI app) -->
+    <NoWarn>$(NoWarn);RS0030</NoWarn>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(Configuration)' == 'Release'">

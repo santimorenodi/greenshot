@@ -37,11 +37,13 @@ using Dapplo.Windows.Common.Structs;
 using Greenshot.Base;
 using Greenshot.Base.Core;
 using Greenshot.Base.Core.Enums;
+using Greenshot.Base.Core.FileFormat;
 using Greenshot.Base.Interfaces;
 using Greenshot.Base.Interfaces.Plugin;
 using Greenshot.Base.Wpf;
 using Greenshot.Editor.Configuration;
 using Greenshot.Helpers;
+using Greenshot.Base.Threading;
 
 namespace Greenshot.Forms.Wpf
 {
@@ -146,7 +148,7 @@ namespace Greenshot.Forms.Wpf
         {
             if (CanConfigureSelectedPlugin)
             {
-                SelectedPlugin?.Plugin.Configure();
+                SimpleServiceProvider.Current.GetInstance<IGreenshotMainForm>(isOptional: true)?.ShowSetting(SelectedPlugin?.Name);
             }
         }
 
@@ -283,6 +285,8 @@ namespace Greenshot.Forms.Wpf
                     _selectedLanguage = value;
                     Language.CurrentLanguage = value;
                     CoreConfiguration.Language = value;
+                    InitializeImageFormats();
+                    OnPropertyChanged(nameof(ImageFormats));
                     OnPropertyChanged();
                 }
             }
@@ -332,12 +336,30 @@ namespace Greenshot.Forms.Wpf
         private void InitializeImageFormats()
         {
             ImageFormats = new List<ImageFormatItem>();
-            foreach (OutputFormat format in System.Enum.GetValues(typeof(OutputFormat)))
+            var registry = SimpleServiceProvider.Current.GetInstance<IFileFormatRegistry>(true);
+            if (registry == null)
+            {
+                return;
+            }
+
+            foreach (var format in registry.GetSaveableFileFormats())
             {
                 ImageFormats.Add(new ImageFormatItem
                 {
-                    Value = format,
-                    Description = Language.Translate(format)
+                    Value = format.Id,
+                    Description = format.GetDisplayNameWithPreferredExtension(),
+                    DisplayNameWithPreferredExtension = format.GetDisplayNameWithPreferredExtension()
+                });
+            }
+
+            // Ensure the current output file format is included in the list, even if it's not registered
+            if (!ImageFormats.Any(item => string.Equals(item.Value, CoreConfiguration.OutputFileFormat, StringComparison.OrdinalIgnoreCase)))
+            {
+                ImageFormats.Add(new ImageFormatItem
+                {
+                    Value = CoreConfiguration.OutputFileFormat,
+                    Description = CoreConfiguration.OutputFileFormat,
+                    DisplayNameWithPreferredExtension = CoreConfiguration.OutputFileFormat
                 });
             }
         }
@@ -372,7 +394,7 @@ namespace Greenshot.Forms.Wpf
                 string description = destination.Designation;
                 try
                 {
-                    description = destination.Description ?? destination.Designation;
+                    description = destination.Descriptor?.DisplayName ?? destination.Designation;
                 }
                 catch
                 {
@@ -389,41 +411,26 @@ namespace Greenshot.Forms.Wpf
                 Destinations.Add(destItem);
             }
 
-            // Asynchronously resolve destination icons in background to keep opening instant
-            Task.Run(() =>
+            // Resolve the destination icons asynchronously, the window opens right away
+            LoadDestinationIconsAsync().FireAndLog("Load the destination icons");
+        }
+
+        /// <summary>
+        /// Started on the UI thread, the icons are set there (continuations return to the UI thread)
+        /// </summary>
+        private async Task LoadDestinationIconsAsync()
+        {
+            foreach (var destItem in Destinations.ToList())
             {
-                foreach (var destItem in Destinations)
+                try
                 {
-                    try
-                    {
-                        var displayIcon = destItem.Destination?.DisplayIcon;
-                        if (displayIcon != null)
-                        {
-                            var iconSource = displayIcon.ToBitmapSource();
-                            if (iconSource != null)
-                            {
-                                iconSource.Freeze();
-                                var dispatcher = Application.Current?.Dispatcher;
-                                if (dispatcher != null && !dispatcher.HasShutdownStarted)
-                                {
-                                    dispatcher.BeginInvoke(new Action(() =>
-                                    {
-                                        destItem.IconSource = iconSource;
-                                    }));
-                                }
-                                else
-                                {
-                                    destItem.IconSource = iconSource;
-                                }
-                            }
-                        }
-                    }
-                    catch
-                    {
-                        // Some plugins may fail to resolve icons if their config section is not initialized
-                    }
+                    destItem.IconSource = await DestinationIcons.GetImageSourceAsync(destItem.Destination?.Descriptor?.IconKey).ConfigureAwait(true);
                 }
-            });
+                catch (Exception)
+                {
+                    // Some plugins may fail to resolve icons if their config section is not initialized
+                }
+            }
         }
 
         private void InitializePlugins()
@@ -483,8 +490,9 @@ namespace Greenshot.Forms.Wpf
 
     public class ImageFormatItem
     {
-        public OutputFormat Value { get; set; }
+        public string Value { get; set; }
         public string Description { get; set; }
+        public string DisplayNameWithPreferredExtension { get; set; }
     }
 
     public class WindowCaptureModeItem
@@ -536,7 +544,7 @@ namespace Greenshot.Forms.Wpf
         public string Version { get; set; }
         public string Company { get; set; }
         public string Location { get; set; }
-        public bool IsConfigurable => Plugin?.IsConfigurable == true;
+        public bool IsConfigurable => Plugin is IConfigurablePlugin;
 
         private UIElement _configControl;
         private bool _controlCreated;
@@ -546,7 +554,7 @@ namespace Greenshot.Forms.Wpf
             if (!_controlCreated)
             {
                 _controlCreated = true;
-                _configControl = Plugin?.CreateConfigurationControl();
+                _configControl = Plugin == null ? null : PluginHelper.Instance.CreateSettingsView(Plugin) as UIElement;
             }
             return _configControl;
         }

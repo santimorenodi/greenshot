@@ -13,6 +13,7 @@ using Greenshot.Base.Recipes;
 using Greenshot.Base.Triggers;
 using Greenshot.Base.Wpf;
 using Microsoft.Win32;
+using Greenshot.Base.Threading;
 
 namespace Greenshot.Plugin.RecipeEditor.ViewModels
 {
@@ -41,7 +42,7 @@ namespace Greenshot.Plugin.RecipeEditor.ViewModels
             ToggleActiveCommand = new RelayCommand(() => IsEnabled = !IsEnabled);
             EditCommand = new RelayCommand(() => _onSelectInEditor?.Invoke(Recipe));
             UnloadCommand = new RelayCommand(ExecuteUnload, () => CanUnload);
-            TestRunCommand = new RelayCommand(async () => await ExecuteTestRunAsync());
+            TestRunCommand = new RelayCommand(() => AsyncCommand.Run(ExecuteTestRunAsync, "Recipe test run"));
         }
 
         public string Id => Recipe.Id;
@@ -53,7 +54,6 @@ namespace Greenshot.Plugin.RecipeEditor.ViewModels
 
         public bool IsBuiltIn => Recipe.IsBuiltIn;
         public bool IsOverridden => Recipe.IsOverridden;
-        public bool IsCustom => !Recipe.IsBuiltIn;
 
         public string RecipeTypeBadge => IsOverridden ? "OVERRIDDEN" : (IsBuiltIn ? "BUILT-IN" : "CUSTOM");
 
@@ -76,20 +76,6 @@ namespace Greenshot.Plugin.RecipeEditor.ViewModels
         public string StatusBadgeText => IsEnabled ? "ACTIVE" : "DEACTIVATED";
 
         public int StepCount => Recipe.Nodes?.Count ?? 0;
-
-        public string SourceSummary
-        {
-            get
-            {
-                var sourceNode = Recipe.FindFirstNodeByType(WellKnownStepTypes.Source);
-                if (sourceNode != null)
-                {
-                    return sourceNode.GetParameter<string>("SourceType") ?? "Capture Source";
-                }
-                if (Recipe.HasVideoStep()) return "Video Recording";
-                return "Workflow";
-            }
-        }
 
         public string TriggersSummary
         {
@@ -171,13 +157,6 @@ namespace Greenshot.Plugin.RecipeEditor.ViewModels
 
         private async Task ExecuteTestRunAsync()
         {
-            var pipeline = _pipeline ?? SimpleServiceProvider.Current?.GetInstance<ICapturePipeline>(isOptional: true);
-            if (pipeline == null)
-            {
-                MessageBox.Show("Capture pipeline service is not available.", "Execution Error", MessageBoxButton.OK, MessageBoxImage.Error);
-                return;
-            }
-
             var valResult = RecipeValidator.Validate(Recipe);
             if (!valResult.IsValid)
             {
@@ -187,8 +166,12 @@ namespace Greenshot.Plugin.RecipeEditor.ViewModels
 
             try
             {
-                var recipeToTest = TriggerRecipePreparer.PrepareForTestRun(Recipe);
-                await pipeline.ExecuteAsync(recipeToTest);
+                var result = await TestRun.RunAsync(Recipe);
+                string error = TestRun.ErrorOf(result);
+                if (error != null)
+                {
+                    throw new InvalidOperationException(error, result.Error);
+                }
             }
             catch (Exception ex)
             {
@@ -271,8 +254,6 @@ namespace Greenshot.Plugin.RecipeEditor.ViewModels
         public int TotalCount => AllRecipes.Count;
         public int ActiveCount => AllRecipes.Count(r => r.IsEnabled);
         public int DeactivatedCount => AllRecipes.Count(r => !r.IsEnabled);
-        public int BuiltInCount => AllRecipes.Count(r => r.IsBuiltIn && !r.IsOverridden);
-        public int CustomCount => AllRecipes.Count(r => !r.IsBuiltIn || r.IsOverridden);
 
         public ICommand LoadRecipeFromFileCommand { get; }
         public ICommand CreateNewRecipeCommand { get; }
@@ -352,8 +333,6 @@ namespace Greenshot.Plugin.RecipeEditor.ViewModels
             OnPropertyChanged(nameof(TotalCount));
             OnPropertyChanged(nameof(ActiveCount));
             OnPropertyChanged(nameof(DeactivatedCount));
-            OnPropertyChanged(nameof(BuiltInCount));
-            OnPropertyChanged(nameof(CustomCount));
         }
 
         private void ExecuteLoadRecipeFromFile()

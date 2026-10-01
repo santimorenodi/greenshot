@@ -23,11 +23,15 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using Dapplo.Ini;
 using Greenshot.Base.Core;
 using Greenshot.Base.Interfaces;
 using Greenshot.Base.Recipes;
+using Greenshot.Base.Triggers;
 using log4net;
+using System.Threading.Tasks;
+using Greenshot.Base.Threading;
 
 namespace Greenshot.Recipes
 {
@@ -62,6 +66,7 @@ namespace Greenshot.Recipes
         public const string RecipeIdClipboard = "recipe_clipboard";
         public const string RecipeIdFile = "recipe_file";
         public const string RecipeIdOcr = "recipe_ocr";
+        public const string RecipeIdExtension = "recipe_browser_extension";
 
         private readonly Dictionary<string, CaptureRecipe> _builtInRecipes = new Dictionary<string, CaptureRecipe>(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<string, CaptureRecipe> _recipes = new Dictionary<string, CaptureRecipe>(StringComparer.OrdinalIgnoreCase);
@@ -69,8 +74,10 @@ namespace Greenshot.Recipes
 
         public event EventHandler RecipesChanged;
 
-        private static RecipeManager _instance;
-        public static RecipeManager Instance => _instance ??= new RecipeManager();
+        // Thread-safe: the first access can come from the UI thread and an IPC or pipeline thread at the same time,
+        // and a second instance would silently lose what was registered in the first one.
+        private static readonly Lazy<RecipeManager> LazyInstance = new Lazy<RecipeManager>(() => new RecipeManager(), LazyThreadSafetyMode.ExecutionAndPublication);
+        public static RecipeManager Instance => LazyInstance.Value;
 
         public RecipeManager()
         {
@@ -81,6 +88,9 @@ namespace Greenshot.Recipes
 
         private void InitializeDefaultRecipes()
         {
+            // Read the disabled recipes once, not per recipe
+            var disabled = GetDisabledRecipeIds();
+
             // 1. Interactive Region Capture
             var regionRecipe = new CaptureRecipe(
                 RecipeIdRegion,
@@ -100,7 +110,7 @@ namespace Greenshot.Recipes
                 .AddTransition("feedback", "scan_post")
                 .AddTransition("scan_post", "export")
                 .AddTransition("export", "notify");
-            RegisterBuiltIn(regionRecipe);
+            RegisterBuiltIn(regionRecipe, disabled);
 
             // 2. Interactive Window Capture
             var windowRecipe = new CaptureRecipe(
@@ -121,7 +131,7 @@ namespace Greenshot.Recipes
                 .AddTransition("feedback", "scan_post")
                 .AddTransition("scan_post", "export")
                 .AddTransition("export", "notify");
-            RegisterBuiltIn(windowRecipe);
+            RegisterBuiltIn(windowRecipe, disabled);
 
             // 3. Active Window Capture
             var activeWindowRecipe = new CaptureRecipe(
@@ -138,7 +148,7 @@ namespace Greenshot.Recipes
                 .AddTransition("feedback", "processors")
                 .AddTransition("processors", "export")
                 .AddTransition("export", "notify");
-            RegisterBuiltIn(activeWindowRecipe);
+            RegisterBuiltIn(activeWindowRecipe, disabled);
 
             // 4. Full Screen Capture
             var fullScreenRecipe = new CaptureRecipe(
@@ -155,7 +165,7 @@ namespace Greenshot.Recipes
                 .AddTransition("feedback", "processors")
                 .AddTransition("processors", "export")
                 .AddTransition("export", "notify");
-            RegisterBuiltIn(fullScreenRecipe);
+            RegisterBuiltIn(fullScreenRecipe, disabled);
 
             // 5. Last Region Capture
             var lastRegionRecipe = new CaptureRecipe(
@@ -172,7 +182,7 @@ namespace Greenshot.Recipes
                 .AddTransition("feedback", "processors")
                 .AddTransition("processors", "export")
                 .AddTransition("export", "notify");
-            RegisterBuiltIn(lastRegionRecipe);
+            RegisterBuiltIn(lastRegionRecipe, disabled);
 
             // 6. Clipboard Import
             var clipboardRecipe = new CaptureRecipe(
@@ -183,7 +193,7 @@ namespace Greenshot.Recipes
                 .AddNode(RecipeStepConfig.CreateDestinations("export", new[] { "Editor" }));
             clipboardRecipe.Flow = new RecipeFlowConfig("acquire")
                 .AddTransition("acquire", "export");
-            RegisterBuiltIn(clipboardRecipe);
+            RegisterBuiltIn(clipboardRecipe, disabled);
 
             // 7. File Import
             var fileRecipe = new CaptureRecipe(
@@ -191,10 +201,11 @@ namespace Greenshot.Recipes
                 Language.GetString("contextmenu_openfile") ?? "Open file",
                 "Import an image or .greenshot file from disk")
                 .AddNode(RecipeStepConfig.CreateSource("acquire", CaptureSourceType.File, captureMouse: false))
-                .AddNode(RecipeStepConfig.CreateDestinations("export", new[] { "Editor" }));
+                .AddNode(RecipeStepConfig.CreateDestinations("export", new[] { "Editor" }))
+                .AddTrigger(TriggerConfig.CreateOpenFile(name: "Default Open With File Trigger"));
             fileRecipe.Flow = new RecipeFlowConfig("acquire")
                 .AddTransition("acquire", "export");
-            RegisterBuiltIn(fileRecipe);
+            RegisterBuiltIn(fileRecipe, disabled);
 
             // 8. OCR Text Capture
             var ocrRecipe = new CaptureRecipe(
@@ -205,13 +216,25 @@ namespace Greenshot.Recipes
                 .AddNode(RecipeStepConfig.CreateSelection("select", CaptureMode.Text))
                 .AddNode(RecipeStepConfig.CreateFeedback("feedback"))
                 .AddNode(RecipeStepConfig.CreateProcessors("ocr", new[] { "Windows10OcrProcessor" }))
-                .AddNode(RecipeStepConfig.CreateDestinations("export", new[] { "Clipboard" }));
+                .AddNode(RecipeStepConfig.CreateClipboard("export", "TextOnly"));
             ocrRecipe.Flow = new RecipeFlowConfig("acquire")
                 .AddTransition("acquire", "select")
                 .AddTransition("select", "feedback")
                 .AddTransition("feedback", "ocr")
                 .AddTransition("ocr", "export");
-            RegisterBuiltIn(ocrRecipe);
+            RegisterBuiltIn(ocrRecipe, disabled);
+
+            // 9. Browser Extension Capture
+            var extensionRecipe = new CaptureRecipe(
+                RecipeIdExtension,
+                Language.GetString("recipe_browser_extension_name") ?? "Capture from browser extension",
+                "Process screenshots received from the browser extension and choose destination interactively")
+                .AddNode(RecipeStepConfig.CreateSource("acquire", CaptureSourceType.Extension, captureMouse: false))
+                .AddNode(RecipeStepConfig.CreateDynamicDestination("export", "Export Browser Capture"))
+                .AddTrigger(TriggerConfig.CreateExtension(name: "Default Browser Extension Trigger"));
+            extensionRecipe.Flow = new RecipeFlowConfig("acquire")
+                .AddTransition("acquire", "export");
+            RegisterBuiltIn(extensionRecipe, disabled);
         }
 
         private HashSet<string> GetDisabledRecipeIds()
@@ -219,7 +242,7 @@ namespace Greenshot.Recipes
             var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             try
             {
-                var recipeConfig = IniConfigRegistry.GetSection<IRecipeConfiguration>();
+                var recipeConfig = RecipeConfigHelper.TryGetRecipeConfiguration();
                 string raw = recipeConfig?.DisabledRecipeIds;
                 if (!string.IsNullOrWhiteSpace(raw))
                 {
@@ -245,7 +268,7 @@ namespace Greenshot.Recipes
             if (string.IsNullOrWhiteSpace(filePath)) return;
             try
             {
-                var recipeConfig = IniConfigRegistry.GetSection<IRecipeConfiguration>();
+                var recipeConfig = RecipeConfigHelper.TryGetRecipeConfiguration();
                 if (recipeConfig == null) return;
 
                 string existing = recipeConfig.RecipeFiles ?? "";
@@ -284,7 +307,7 @@ namespace Greenshot.Recipes
             if (string.IsNullOrWhiteSpace(filePath)) return;
             try
             {
-                var recipeConfig = IniConfigRegistry.GetSection<IRecipeConfiguration>();
+                var recipeConfig = RecipeConfigHelper.TryGetRecipeConfiguration();
                 if (recipeConfig == null) return;
 
                 string existing = recipeConfig.RecipeFiles ?? "";
@@ -313,11 +336,11 @@ namespace Greenshot.Recipes
             }
         }
 
-        private void RegisterBuiltIn(CaptureRecipe recipe)
+        private void RegisterBuiltIn(CaptureRecipe recipe, ISet<string> disabledRecipeIds)
         {
             recipe.IsBuiltIn = true;
             recipe.IsOverridden = false;
-            recipe.IsEnabled = !GetDisabledRecipeIds().Contains(recipe.Id);
+            recipe.IsEnabled = !disabledRecipeIds.Contains(recipe.Id);
             _builtInRecipes[recipe.Id] = recipe.Clone();
             _recipes[recipe.Id] = recipe;
         }
@@ -330,7 +353,7 @@ namespace Greenshot.Recipes
                 return;
             }
 
-            var recipeConfig = IniConfigRegistry.GetSection<IRecipeConfiguration>();
+            var recipeConfig = RecipeConfigHelper.TryGetRecipeConfiguration();
             string configured = recipeConfig?.RecipeFiles;
             if (string.IsNullOrWhiteSpace(configured)) return;
 
@@ -480,7 +503,7 @@ namespace Greenshot.Recipes
                         }
                     }
 
-                    if (valResult.HasExternalCommands && !allowExternalCommands)
+                    if (valResult.HasGatedActions && !allowExternalCommands)
                     {
                         overallResult.AddError($"Recipe '{recipe.Name}' contains external commands, but authorization was not granted.");
                         continue;
@@ -531,9 +554,18 @@ namespace Greenshot.Recipes
             return overallResult;
         }
 
+        /// <summary>
+        /// Show the approval dialog (modal, on the UI thread)
+        /// </summary>
         private bool RequestInteractiveApproval(CaptureRecipe recipe, string filePath, RecipeValidationResult valResult, out bool allowExternalCommands)
         {
             allowExternalCommands = false;
+            if (!UiDispatcher.Current.CheckAccess())
+            {
+                Log.WarnFormat("The approval of '{0}' can only be asked on the UI thread, the recipe is not approved.", filePath);
+                return false;
+            }
+
             bool approved = false;
             bool localAllow = false;
 
@@ -555,12 +587,7 @@ namespace Greenshot.Recipes
                 {
                     try
                     {
-                        if (mainForm.InvokeRequired)
-                        {
-                            ownerHwnd = (IntPtr)mainForm.Invoke(new Func<IntPtr>(() =>
-                                (mainForm.Visible && !mainForm.Disposing && !mainForm.IsDisposed) ? mainForm.Handle : IntPtr.Zero));
-                        }
-                        else if (mainForm.Visible && !mainForm.Disposing && !mainForm.IsDisposed)
+                        if (mainForm.Visible && !mainForm.Disposing && !mainForm.IsDisposed)
                         {
                             ownerHwnd = mainForm.Handle;
                         }
@@ -602,17 +629,7 @@ namespace Greenshot.Recipes
                 }
             }
 
-            if (System.Threading.Thread.CurrentThread.GetApartmentState() == System.Threading.ApartmentState.STA)
-            {
-                Show();
-            }
-            else
-            {
-                var staThread = new System.Threading.Thread(() => Show());
-                staThread.SetApartmentState(System.Threading.ApartmentState.STA);
-                staThread.Start();
-                staThread.Join();
-            }
+            Show();
 
             allowExternalCommands = localAllow;
             return approved;
@@ -630,7 +647,7 @@ namespace Greenshot.Recipes
         /// If the file has changed since approval, prompts the user interactively (if possible)
         /// and reloads the recipe. Returns the valid/updated recipe, or null if unapproved/rejected.
         /// </summary>
-        public CaptureRecipe EnsureRecipeApprovedAndUpToDate(CaptureRecipe currentRecipe)
+        public async Task<CaptureRecipe> EnsureRecipeApprovedAndUpToDateAsync(CaptureRecipe currentRecipe, CancellationToken cancellationToken = default)
         {
             if (currentRecipe == null) return null;
             if (string.IsNullOrEmpty(currentRecipe.FilePath))
@@ -661,7 +678,8 @@ namespace Greenshot.Recipes
             if (!isApproved)
             {
                 Log.InfoFormat("Recipe file '{0}' was modified on disk or is not approved. Prompting user for approval before execution.", fullPath);
-                var result = LoadRecipeFromFile(fullPath, interactiveApproval: true, forceApprovalPrompt: false);
+                // The approval dialog is shown on the UI thread, the flow waits for it without blocking
+                var result = await UiDispatcher.Current.InvokeAsync(() => LoadRecipeFromFile(fullPath, interactiveApproval: true, forceApprovalPrompt: false), cancellationToken).ConfigureAwait(false);
                 if (!result.IsValid)
                 {
                     Log.WarnFormat("Recipe re-approval or reload failed for '{0}': {1}", fullPath, string.Join("; ", result.Errors));
@@ -835,7 +853,7 @@ namespace Greenshot.Recipes
 
             try
             {
-                var recipeConfig = IniConfigRegistry.GetSection<IRecipeConfiguration>();
+                var recipeConfig = RecipeConfigHelper.TryGetRecipeConfiguration();
                 if (recipeConfig != null)
                 {
                     var disabled = GetDisabledRecipeIds();

@@ -15,16 +15,17 @@ Requirements:
 ```bash
 git clone https://github.com/santimorenodi/greenshot.git
 cd greenshot
-dotnet build src/Greenshot.sln -c Release
+dotnet build src/Greenshot.Managed.slnf -c Release
 ```
 
+- Build `src/Greenshot.Managed.slnf`, not `Greenshot.sln`: the solution also has upstream's native C++ projects (`greenshot-proxy`, its `greenshot.com`), which `dotnet build` cannot compile (`MSB4278 Microsoft.Cpp.Default.props`) and which need the Visual Studio 2026 C++ toolset (v145). The filter also leaves out the Inno Setup installer.
 - Success = `0 Errores` / `0 Error(s)`. Warnings are expected.
 - Output: `src/Greenshot/bin/Release/net480/` with `Greenshot.exe`, `greenshot-cli.exe` and the plugins.
 - Use `dotnet build`, not Visual Studio 2022's MSBuild: older VS MSBuild versions cannot resolve the pinned SDK (`Microsoft.NET.Sdk.WindowsDesktop` not found).
 - Cloud plugins (Box, Dropbox, Imgur) build with empty API credentials unless the `*_ClientId` / `*_ClientSecret` environment variables are set. That only matters for uploading.
 
 Optionally add the output folder to `PATH` or set `GREENSHOT_CLI` to the full path of
-`greenshot-cli.exe` so the `take-screenshot` skill finds it.
+`greenshot-cli.exe` so the `screenshot` skill finds it.
 
 ## Greenshot app hotkeys
 

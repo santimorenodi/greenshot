@@ -32,6 +32,7 @@ using Greenshot.Base.Pipeline;
 using Greenshot.Base.Recipes;
 using Greenshot.Base.Triggers;
 using Greenshot.Recipes;
+using Greenshot.Base.Threading;
 
 namespace Greenshot.UI
 {
@@ -292,8 +293,13 @@ namespace Greenshot.UI
             PopulateSteps(recipe);
         }
 
+        /// <summary>
+        /// Show the validation errors (modal on the UI thread, from another thread it's posted to it)
+        /// </summary>
         public static void ShowValidationError(string filePath, RecipeValidationResult validationResult = null, CaptureRecipe recipe = null, string rawErrorMessage = null)
         {
+            UiDispatcher.Current.RunOnUiAsync(Show).FireAndLog("Show the recipe validation errors");
+
             void Show()
             {
                 var window = new RecipeApprovalWindow(filePath, validationResult, recipe, rawErrorMessage)
@@ -309,12 +315,7 @@ namespace Greenshot.UI
                 {
                     try
                     {
-                        if (mainForm.InvokeRequired)
-                        {
-                            ownerHwnd = (IntPtr)mainForm.Invoke(new Func<IntPtr>(() =>
-                                (mainForm.Visible && !mainForm.Disposing && !mainForm.IsDisposed) ? mainForm.Handle : IntPtr.Zero));
-                        }
-                        else if (mainForm.Visible && !mainForm.Disposing && !mainForm.IsDisposed)
+                        if (mainForm.Visible && !mainForm.Disposing && !mainForm.IsDisposed)
                         {
                             ownerHwnd = mainForm.Handle;
                         }
@@ -349,18 +350,6 @@ namespace Greenshot.UI
                 }
 
                 window.ShowDialog();
-            }
-
-            if (System.Threading.Thread.CurrentThread.GetApartmentState() == System.Threading.ApartmentState.STA)
-            {
-                Show();
-            }
-            else
-            {
-                var staThread = new System.Threading.Thread(() => Show());
-                staThread.SetApartmentState(System.Threading.ApartmentState.STA);
-                staThread.Start();
-                staThread.Join();
             }
         }
 
@@ -424,17 +413,13 @@ namespace Greenshot.UI
                 {
                     var s = recipe.Nodes[i];
                     string paramSummary = "";
-                    if (string.Equals(s.StepType, WellKnownStepTypes.Border, StringComparison.OrdinalIgnoreCase))
-                    {
-                        paramSummary = $" ({s.GetParameter<int>("Width", 2)}px, {s.GetParameter<string>("Color", "Black")})";
-                    }
-                    else if (string.Equals(s.StepType, WellKnownStepTypes.Source, StringComparison.OrdinalIgnoreCase))
+                    if (string.Equals(s.StepType, WellKnownStepTypes.Source, StringComparison.OrdinalIgnoreCase))
                     {
                         paramSummary = $" [{s.GetParameter<string>("SourceType", "Region")}]";
                     }
                     else if (string.Equals(s.StepType, WellKnownStepTypes.Annotation, StringComparison.OrdinalIgnoreCase))
                     {
-                        paramSummary = $" [{s.GetParameter<string>("AnnotationType", s.GetParameter<string>("Type", "Element"))}]";
+                        paramSummary = $" [{s.GetParameter<string>("Type", "Element")}]";
                     }
                     else if (string.Equals(s.StepType, WellKnownStepTypes.SetVariable, StringComparison.OrdinalIgnoreCase))
                     {
@@ -589,7 +574,7 @@ namespace Greenshot.UI
             {
                 if (!string.IsNullOrEmpty(RecipeJsonContent))
                 {
-                    System.Windows.Clipboard.SetText(RecipeJsonContent);
+                    ClipboardHelper.SetClipboardData(RecipeJsonContent);
                 }
             }
             catch (Exception ex)

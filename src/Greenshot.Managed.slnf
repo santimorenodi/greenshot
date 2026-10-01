@@ -1,0 +1,22 @@
+{
+  "solution": {
+    "path": "Greenshot.sln",
+    "projects": [
+      "Greenshot\\Greenshot.csproj",
+      "Greenshot.Base\\Greenshot.Base.csproj",
+      "Greenshot.Plugin.ExternalCommand\\Greenshot.Plugin.ExternalCommand.csproj",
+      "Greenshot.Plugin.Confluence\\Greenshot.Plugin.Confluence.csproj",
+      "Greenshot.Plugin.Imgur\\Greenshot.Plugin.Imgur.csproj",
+      "Greenshot.Plugin.Jira\\Greenshot.Plugin.Jira.csproj",
+      "Greenshot.Plugin.Box\\Greenshot.Plugin.Box.csproj",
+      "Greenshot.Plugin.Dropbox\\Greenshot.Plugin.Dropbox.csproj",
+      "Greenshot.Plugin.Office\\Greenshot.Plugin.Office.csproj",
+      "Greenshot.Plugin.Zxing\\Greenshot.Plugin.Zxing.csproj",
+      "Greenshot.Editor\\Greenshot.Editor.csproj",
+      "Greenshot.BuildTasks\\Greenshot.BuildTasks.csproj",
+      "Greenshot.Tests\\Greenshot.Tests.csproj",
+      "Greenshot.Plugin.RecipeEditor\\Greenshot.Plugin.RecipeEditor.csproj",
+      "Greenshot.Cli\\Greenshot.Cli.csproj"
+    ]
+  }
+}

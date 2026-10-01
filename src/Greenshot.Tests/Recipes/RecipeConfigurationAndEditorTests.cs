@@ -32,6 +32,7 @@ using Greenshot.Plugin.RecipeEditor;
 using Greenshot.Plugin.Zxing;
 using Greenshot.Recipes;
 using Xunit;
+using System.Linq;
 
 namespace Greenshot.Tests.Recipes
 {
@@ -127,13 +128,11 @@ namespace Greenshot.Tests.Recipes
         public void RecipeEditorPlugin_RegistersEditorService()
         {
             var plugin = new RecipeEditorPlugin();
-            var locator = new SimpleServiceProvider();
-            plugin.RegisterServices(locator);
+            var services = new Greenshot.Tests.Plugins.TestPluginServices();
+            plugin.ConfigureServices(services);
 
-            var editorService = locator.GetInstance<IRecipeEditorService>(isOptional: true);
+            var editorService = services.GetServices<IRecipeEditorService>().SingleOrDefault();
             Assert.NotNull(editorService);
-
-            plugin.Shutdown();
         }
 
         [Fact]
@@ -169,7 +168,6 @@ namespace Greenshot.Tests.Recipes
             Assert.Equal("dyn_dest", config.OnErrorNodeId);
             Assert.Null(config.OnErrorRecipeId);
             Assert.True(vm.IsOnErrorStep);
-            Assert.Contains("dyn_dest", vm.OnErrorSummary);
 
             // Set to Recipe
             vm.OnErrorAction = "Recipe";
@@ -177,7 +175,6 @@ namespace Greenshot.Tests.Recipes
             Assert.Equal("rec_recovery", config.OnErrorRecipeId);
             Assert.Null(config.OnErrorNodeId);
             Assert.True(vm.IsOnErrorRecipe);
-            Assert.Contains("rec_recovery", vm.OnErrorSummary);
         }
 
         [Fact]

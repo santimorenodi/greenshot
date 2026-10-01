@@ -28,12 +28,15 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using System.Threading;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 using Dapplo.Windows.Common.Structs;
 using Greenshot.Base.Core;
 using Greenshot.Base.Core.Enums;
+using Greenshot.Base.Core.FileFormat;
 using Greenshot.Base.Interfaces;
 using Greenshot.Base.Interfaces.Plugin;
+using Greenshot.Base.Threading;
 using Greenshot.Editor.Configuration;
 using Greenshot.Editor.Drawing;
 using Greenshot.Editor.FileFormatHandlers;
@@ -165,14 +168,24 @@ internal static class Program
                 return args.Length == 0 ? 1 : 0;
             }
 
+            // The capture code is async and runs the DWM capture form through the UI dispatcher, this thread is that UI thread
+            SimpleServiceProvider.Current.AddService<IUiDispatcher>(WinFormsUiDispatcher.CreateForCurrentThread());
+
             // In-memory configuration with defaults, the capture code reads its settings from it
             IniConfigHelper.EnsureInitialized();
             // The editor elements read their default colors, fonts etc. from here, also in memory with defaults
             IniConfigHelper.EnsureSection<IEditorConfiguration>(() => new EditorConfigurationImpl());
-            // ImageIO saves through the registered file format handlers, Greenshot.exe registers them in EditorInitialize
-            SimpleServiceProvider.Current.AddService<IFileFormatHandler>(new DefaultFileFormatHandler());
+            // ImageIO saves through the registered file format handlers and the format registry,
+            // Greenshot.exe sets them up in MainForm and EditorInitialize
+            var fileFormatRegistry = new FileFormatRegistry();
+            SimpleServiceProvider.Current.AddService<IFileFormatRegistry>(fileFormatRegistry);
+            CoreFileFormats.RegisterCoreFileFormats(fileFormatRegistry);
+            var defaultHandler = new DefaultFileFormatHandler();
             // .greenshot files keep the elements editable, loading one needs to know how to make a surface
-            SimpleServiceProvider.Current.AddService<IFileFormatHandler>(new GreenshotFileFormatHandler());
+            var greenshotHandler = new GreenshotFileFormatHandler();
+            SimpleServiceProvider.Current.AddService<IFileFormatHandler>(defaultHandler, greenshotHandler);
+            defaultHandler.RegisterFileFormats(fileFormatRegistry);
+            greenshotHandler.RegisterFileFormats(fileFormatRegistry);
             SimpleServiceProvider.Current.AddService<Func<ISurface>>(() => new Surface());
 
             switch (args[0])
@@ -481,7 +494,7 @@ internal static class Program
         }
 
         string fullPath = ResolveOutputPath(output.Output, ref output.Format);
-        OutputFormat outputFormat = ParseOutputFormat(output.Format, annotations);
+        string outputFormat = ParseOutputFormat(output.Format, annotations);
 
         Rectangle? relativeRegion = null;
         if (windowTarget && region != null)
@@ -524,16 +537,16 @@ internal static class Program
             if (monitor != null)
             {
                 screenRect = GetMonitorBounds(monitor);
-                capture = WindowCapture.CaptureRectangle(new Base.Core.Capture(), screenRect);
+                capture = Wait(WindowCapture.CaptureRectangleAsync(new Base.Core.Capture(), screenRect));
             }
             else if (region != null)
             {
                 screenRect = ParseRegion(region);
-                capture = WindowCapture.CaptureRectangle(new Base.Core.Capture(), screenRect);
+                capture = Wait(WindowCapture.CaptureRectangleAsync(new Base.Core.Capture(), screenRect));
             }
             else
             {
-                capture = WindowCapture.CaptureScreen(new Base.Core.Capture());
+                capture = Wait(WindowCapture.CaptureScreenAsync(new Base.Core.Capture()));
                 screenRect = capture?.ScreenBounds ?? default;
             }
 
@@ -617,8 +630,8 @@ internal static class Program
         // a grid is only there to read positions, it never overwrites the image it was made from
         string target = output.Output ?? (grid > 0 ? Path.ChangeExtension(inputPath, ".grid" + Path.GetExtension(inputPath)) : inputPath);
         string fullPath = ResolveOutputPath(target, ref output.Format);
-        OutputFormat outputFormat = ParseOutputFormat(output.Format, annotations);
-        if (grid > 0 && outputFormat == OutputFormat.greenshot)
+        string outputFormat = ParseOutputFormat(output.Format, annotations);
+        if (grid > 0 && outputFormat == WellKnownFileFormats.Greenshot)
         {
             throw new CliException("a grid can't be kept editable, save to png, jpg, bmp, gif or tiff to use --grid");
         }
@@ -730,7 +743,7 @@ internal static class Program
         }
 
         string fullPath = ResolveOutputPath(output.Output, ref output.Format);
-        OutputFormat outputFormat = ParseOutputFormat(output.Format, annotations);
+        string outputFormat = ParseOutputFormat(output.Format, annotations);
 
         var images = new List<Image>();
         try
@@ -863,7 +876,7 @@ internal static class Program
 
         string target = output.Output ?? Path.ChangeExtension(afterPath, ".diff" + Path.GetExtension(afterPath));
         string fullPath = ResolveOutputPath(target, ref output.Format);
-        OutputFormat outputFormat = ParseOutputFormat(output.Format, annotations);
+        string outputFormat = ParseOutputFormat(output.Format, annotations);
 
         using var beforeImage = LoadBitmap(beforePath);
         using var afterImage = LoadBitmap(afterPath);
@@ -960,13 +973,13 @@ internal static class Program
     /// Apply the annotations and save: a .greenshot keeps the elements editable, anything else is the rendered image.
     /// Also writes the preview when one was asked for. Does not print anything.
     /// </summary>
-    private static SaveResult Save(Surface surface, Annotations annotations, OutputOptions options, string fullPath, OutputFormat outputFormat, int grid)
+    private static SaveResult Save(Surface surface, Annotations annotations, OutputOptions options, string fullPath, string outputFormat, int grid)
     {
         annotations.ApplyTo(surface);
         var settings = new SurfaceOutputSettings(outputFormat, options.Quality);
         var result = new SaveResult { Path = fullPath };
 
-        if (outputFormat == OutputFormat.greenshot)
+        if (outputFormat == WellKnownFileFormats.Greenshot)
         {
             ImageIO.Save(surface, fullPath, true, settings, false);
             CheckWritten(fullPath, options.Format);
@@ -1020,7 +1033,7 @@ internal static class Program
         {
             throw new CliException("a preview is an image, use png, jpg, bmp, gif or tiff");
         }
-        OutputFormat previewFormat = ParseOutputFormat(format, null);
+        string previewFormat = ParseOutputFormat(format, null);
 
         using var preview = ImageTools.Preview(image, options.PreviewWidth, options.PreviewMax);
         string folder = Path.GetDirectoryName(previewPath);
@@ -1077,23 +1090,39 @@ internal static class Program
         throw new CliException($"no file format handler could write {format}");
     }
 
-    private static OutputFormat ParseOutputFormat(string format, Annotations annotations)
+    private static string ParseOutputFormat(string format, Annotations annotations)
     {
-        OutputFormat outputFormat = format switch
+        string outputFormat = format switch
         {
-            "png" => OutputFormat.png,
-            "jpg" or "jpeg" => OutputFormat.jpg,
-            "bmp" => OutputFormat.bmp,
-            "gif" => OutputFormat.gif,
-            "tif" or "tiff" => OutputFormat.tiff,
-            "greenshot" => OutputFormat.greenshot,
+            "png" => WellKnownFileFormats.Png,
+            "jpg" or "jpeg" => WellKnownFileFormats.Jpg,
+            "bmp" => WellKnownFileFormats.Bmp,
+            "gif" => WellKnownFileFormats.Gif,
+            "tif" or "tiff" => WellKnownFileFormats.Tiff,
+            "greenshot" => WellKnownFileFormats.Greenshot,
             _ => throw new CliException($"unsupported format: {format}")
         };
-        if (outputFormat == OutputFormat.greenshot && annotations != null && annotations.HasEffects)
+        if (outputFormat == WellKnownFileFormats.Greenshot && annotations != null && annotations.HasEffects)
         {
             throw new CliException("image effects can't be kept editable, save to png, jpg, bmp, gif or tiff to use them");
         }
         return outputFormat;
+    }
+
+    /// <summary>
+    /// Wait for an async capture call while pumping messages, so work it sends to the UI dispatcher (this thread) can run.
+    /// </summary>
+    internal static T Wait<T>(Task<T> task)
+    {
+        if (!task.IsCompleted)
+        {
+            _ = task.ContinueWith(_ => Application.ExitThread(), CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.FromCurrentSynchronizationContext());
+            Application.Run();
+        }
+        // The task is completed here, so this can't deadlock
+#pragma warning disable VSTHRD002
+        return task.GetAwaiter().GetResult();
+#pragma warning restore VSTHRD002
     }
 
     private static void OpenInEditor(string fullPath)

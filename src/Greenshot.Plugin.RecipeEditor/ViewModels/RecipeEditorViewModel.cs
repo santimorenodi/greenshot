@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Input;
 using Greenshot.Base.Core;
+using Greenshot.Base.Core.FileFormat;
 using Greenshot.Base.Interfaces;
 using Greenshot.Base.Pipeline;
 using Greenshot.Base.Recipes;
@@ -15,6 +16,7 @@ using Greenshot.Base.Wpf;
 using Greenshot.Plugin.RecipeEditor.Layout;
 using Microsoft.Win32;
 using Newtonsoft.Json.Linq;
+using Greenshot.Base.Threading;
 
 namespace Greenshot.Plugin.RecipeEditor.ViewModels
 {
@@ -34,6 +36,7 @@ namespace Greenshot.Plugin.RecipeEditor.ViewModels
         public ObservableCollection<StepConnectionViewModel> Connections { get; } = new ObservableCollection<StepConnectionViewModel>();
         public ObservableCollection<TriggerItemViewModel> Triggers { get; } = new ObservableCollection<TriggerItemViewModel>();
         public PendingConnectionViewModel PendingConnection { get; } = new PendingConnectionViewModel();
+        public ObservableCollection<FileFormatOption> OutputFormatOptions { get; } = new ObservableCollection<FileFormatOption>();
 
         public CaptureRecipe ActiveRecipe
         {
@@ -43,10 +46,10 @@ namespace Greenshot.Plugin.RecipeEditor.ViewModels
                 if (SetField(ref _activeRecipe, value))
                 {
                     LoadRecipeIntoCanvas(value);
+                    OnPropertyChanged(nameof(RecipeId));
                     OnPropertyChanged(nameof(RecipeTitle));
                     OnPropertyChanged(nameof(RecipeDescription));
                     OnPropertyChanged(nameof(RecipeVersion));
-                    OnPropertyChanged(nameof(SelectedStartNode));
                     OnPropertyChanged(nameof(IsActiveRecipeEnabled));
                     OnPropertyChanged(nameof(ActiveRecipeStatusText));
                     OnPropertyChanged(nameof(CanUnloadActiveRecipe));
@@ -82,14 +85,16 @@ namespace Greenshot.Plugin.RecipeEditor.ViewModels
             ? "Revert overridden recipe to default built-in definition"
             : "Unload custom recipe from Greenshot";
 
-        public StepNodeViewModel SelectedStartNode
+        public string RecipeId
         {
-            get => Nodes.FirstOrDefault(n => n.IsStartNode);
+            get => _activeRecipe?.Id ?? "";
             set
             {
-                if (value != null)
+                if (_activeRecipe != null && _activeRecipe.Id != value)
                 {
-                    SetStartNode(value);
+                    _activeRecipe.Id = value;
+                    IsDirty = true;
+                    OnPropertyChanged();
                 }
             }
         }
@@ -151,6 +156,11 @@ namespace Greenshot.Plugin.RecipeEditor.ViewModels
             {
                 if (SetField(ref _selectedNode, value))
                 {
+                    AddCurrentFormatOption(value?.OutputFileFormat);
+                    AddCurrentFormatOption(value?.ExternalCommandFormat);
+                    AddCurrentFormatOption(value?.ImgurFormat);
+                    AddCurrentFormatOption(value?.JiraFormat);
+                    AddCurrentFormatOption(value?.ConfluenceFormat);
                     foreach (var n in Nodes) n.IsSelected = (n == value);
                     if (value != null)
                     {
@@ -252,6 +262,7 @@ namespace Greenshot.Plugin.RecipeEditor.ViewModels
         public ICommand ApplyJsonCommand { get; }
         public ICommand ToggleMermaidViewCommand { get; }
         public ICommand CopyMermaidCommand { get; }
+        public ICommand CopyRecipeIdCommand { get; }
         public ICommand SetStartNodeCommand { get; }
         public ICommand ToggleStartNodeCommand { get; }
         public ICommand AddTriggerCommand { get; }
@@ -267,19 +278,29 @@ namespace Greenshot.Plugin.RecipeEditor.ViewModels
         public RecipeEditorViewModel(IRecipeManager recipeManager = null)
         {
             _recipeManager = recipeManager ?? SimpleServiceProvider.Current.GetInstance<IRecipeManager>(isOptional: true);
+            InitializeOutputFormatOptions();
 
             NewRecipeCommand = new RelayCommand(NewRecipe);
             OpenRecipeCommand = new RelayCommand(OpenRecipeDialog);
             SaveRecipeCommand = new RelayCommand(SaveRecipe);
             SaveAsCommand = new RelayCommand(SaveAsRecipe);
             AutoLayoutCommand = new RelayCommand(PerformAutoLayout);
-            TestRunCommand = new RelayCommand(async () => await ExecuteTestRunAsync());
+            TestRunCommand = new RelayCommand(() => AsyncCommand.Run(ExecuteTestRunAsync, "Recipe test run"));
             DeleteSelectedCommand = new RelayCommand(DeleteSelected, () => SelectedNode != null || SelectedConnection != null);
             AddStepCommand = new RelayCommand(p => AddStep(p as string));
             ToggleJsonViewCommand = new RelayCommand(ToggleJsonView);
             ApplyJsonCommand = new RelayCommand(ApplyJson);
             ToggleMermaidViewCommand = new RelayCommand(ToggleMermaidView);
             CopyMermaidCommand = new RelayCommand(CopyMermaidToClipboard);
+            CopyRecipeIdCommand = new RelayCommand(() =>
+            {
+                if (!string.IsNullOrWhiteSpace(RecipeId))
+                {
+                    StatusMessage = ClipboardHelper.TrySetClipboardData(RecipeId, out var copyError)
+                        ? $"Copied Recipe ID '{RecipeId}' to clipboard"
+                        : $"Failed to copy to clipboard: {copyError}";
+                }
+            });
             SetStartNodeCommand = new RelayCommand(p => SetStartNode(p as StepNodeViewModel ?? SelectedNode));
             ToggleStartNodeCommand = new RelayCommand(p => ToggleStartNode(p as StepNodeViewModel ?? SelectedNode));
             AddTriggerCommand = new RelayCommand(p => AddTrigger(p as string));
@@ -295,10 +316,7 @@ namespace Greenshot.Plugin.RecipeEditor.ViewModels
             {
                 _recipeManager.RecipesChanged += (s, e) =>
                 {
-                    Application.Current?.Dispatcher?.BeginInvoke((Action)(() =>
-                    {
-                        RefreshAvailableRecipes();
-                    }));
+                    UiDispatcher.Current.InvokeAsync(RefreshAvailableRecipes).FireAndLog("Refresh the available recipes");
                 };
             }
 
@@ -348,6 +366,42 @@ namespace Greenshot.Plugin.RecipeEditor.ViewModels
             });
 
             RefreshAvailableRecipes();
+        }
+
+        private void InitializeOutputFormatOptions()
+        {
+            OutputFormatOptions.Clear();
+            OutputFormatOptions.Add(new FileFormatOption
+            {
+                Id = string.Empty,
+                DisplayName = "(From Configuration)",
+                DisplayNameWithPreferredExtension = "(From Configuration)"
+            });
+
+            var registry = SimpleServiceProvider.Current.GetInstance<IFileFormatRegistry>(true);
+            if (registry == null)
+            {
+                return;
+            }
+
+            foreach (var option in registry.GetSaveableFileFormatOptions())
+            {
+                OutputFormatOptions.Add(option);
+            }
+        }
+
+        private void AddCurrentFormatOption(string formatId)
+        {
+            if (!string.IsNullOrWhiteSpace(formatId) &&
+                !OutputFormatOptions.Any(option => string.Equals(option.Id, formatId, StringComparison.OrdinalIgnoreCase)))
+            {
+                OutputFormatOptions.Add(new FileFormatOption
+                {
+                    Id = formatId,
+                    DisplayName = formatId,
+                    DisplayNameWithPreferredExtension = formatId
+                });
+            }
         }
 
         public void RefreshAvailableRecipes()
@@ -530,7 +584,6 @@ namespace Greenshot.Plugin.RecipeEditor.ViewModels
             // Apply DagAutoLayout
             PerformAutoLayout();
             ValidateGraphCycles();
-            OnPropertyChanged(nameof(SelectedStartNode));
             IsDirty = false;
             StatusMessage = $"Loaded recipe '{recipe.Name}' ({recipe.Nodes.Count} steps, {Triggers.Count} triggers)";
         }
@@ -541,7 +594,6 @@ namespace Greenshot.Plugin.RecipeEditor.ViewModels
             {
                 ActiveRecipe.Flow.StartNodes = Nodes.Where(n => n.IsStartNode).Select(n => n.Id).ToList();
                 IsDirty = true;
-                OnPropertyChanged(nameof(SelectedStartNode));
                 StatusMessage = node.IsStartNode ? $"Added '{node.DisplayName}' to Start Steps" : $"Removed '{node.DisplayName}' from Start Steps";
             }
         }
@@ -554,7 +606,6 @@ namespace Greenshot.Plugin.RecipeEditor.ViewModels
             {
                 ActiveRecipe.Flow.StartNodes = Nodes.Where(n => n.IsStartNode).Select(n => n.Id).ToList();
             }
-            OnPropertyChanged(nameof(SelectedStartNode));
             IsDirty = true;
             StatusMessage = $"'{node.DisplayName}' marked as Start Step";
         }
@@ -607,6 +658,22 @@ namespace Greenshot.Plugin.RecipeEditor.ViewModels
             else if (string.Equals(type, "Clipboard", StringComparison.OrdinalIgnoreCase))
             {
                 config.Parameters["FormatFilter"] = "";
+            }
+            else if (string.Equals(type, TriggerConfig.TypeCommandline, StringComparison.OrdinalIgnoreCase))
+            {
+                config.Parameters["Command"] = ActiveRecipe?.Id ?? "custom";
+                config.Parameters["Description"] = ActiveRecipe?.Description ?? "Custom commandline recipe";
+                config.Parameters["FireAndForget"] = false;
+            }
+            else if (string.Equals(type, TriggerConfig.TypeOpenFile, StringComparison.OrdinalIgnoreCase))
+            {
+                config.Parameters["Filter"] = "";
+                config.Parameters["FireAndForget"] = false;
+            }
+            else if (string.Equals(type, TriggerConfig.TypeExtension, StringComparison.OrdinalIgnoreCase))
+            {
+                config.Parameters["Browser"] = "";
+                config.Parameters["FireAndForget"] = false;
             }
 
             var item = new TriggerItemViewModel(config, SyncTriggersToRecipe, RemoveTrigger);
@@ -1170,19 +1237,17 @@ namespace Greenshot.Plugin.RecipeEditor.ViewModels
                 return;
             }
 
-            var pipeline = SimpleServiceProvider.Current.GetInstance<ICapturePipeline>(isOptional: true);
-            if (pipeline == null)
-            {
-                MessageBox.Show("Capture pipeline service is not available.", "Execution Error", MessageBoxButton.OK, MessageBoxImage.Error);
-                return;
-            }
-
             StatusMessage = $"Executing test run for '{ActiveRecipe.Name}'...";
             try
             {
-                var recipeToTest = TriggerRecipePreparer.PrepareForTestRun(ActiveRecipe);
-                await pipeline.ExecuteAsync(recipeToTest);
-                StatusMessage = $"Test run of '{recipeToTest.Name}' completed successfully.";
+                var result = await TestRun.RunAsync(ActiveRecipe);
+                string error = TestRun.ErrorOf(result);
+                if (error != null)
+                {
+                    throw new InvalidOperationException(error, result.Error);
+                }
+
+                StatusMessage = $"Test run of '{ActiveRecipe.Name}' ended: {result.State}.";
             }
             catch (Exception ex)
             {
@@ -1243,7 +1308,7 @@ namespace Greenshot.Plugin.RecipeEditor.ViewModels
             {
                 if (!string.IsNullOrEmpty(MermaidText))
                 {
-                    Clipboard.SetText(MermaidText);
+                    ClipboardHelper.SetClipboardData(MermaidText);
                     StatusMessage = "Copied Mermaid DSL to clipboard.";
                 }
             }
@@ -1305,6 +1370,20 @@ namespace Greenshot.Plugin.RecipeEditor.ViewModels
                     {
                         string cron = t.GetParameter<string>("CronExpression", t.GetParameter<string>("IntervalSeconds", "Timer"));
                         tLabel = $"⏰ Schedule: {cron}";
+                    }
+                    else if (string.Equals(t.TriggerType, TriggerConfig.TypeCommandline, StringComparison.OrdinalIgnoreCase))
+                    {
+                        string cmd = t.GetParameter<string>("Command", t.Name ?? "command");
+                        tLabel = $"💻 CLI: {cmd}";
+                    }
+                    else if (string.Equals(t.TriggerType, TriggerConfig.TypeOpenFile, StringComparison.OrdinalIgnoreCase))
+                    {
+                        tLabel = "📂 Open With File";
+                    }
+                    else if (string.Equals(t.TriggerType, TriggerConfig.TypeExtension, StringComparison.OrdinalIgnoreCase))
+                    {
+                        string browser = t.GetParameter<string>("Browser", "");
+                        tLabel = string.IsNullOrEmpty(browser) ? "🌐 Browser Extension" : $"🌐 Extension ({browser})";
                     }
                     else
                     {
@@ -1383,7 +1462,7 @@ namespace Greenshot.Plugin.RecipeEditor.ViewModels
                     if (string.IsNullOrWhiteSpace(ct?.From) || string.IsNullOrWhiteSpace(ct?.To)) continue;
 
                     string expr = "";
-                    if (nodeMap.TryGetValue(ct.From, out var srcNode) && srcNode.Parameters != null && srcNode.Parameters.TryGetValue("branches", out var bObj))
+                    if (nodeMap.TryGetValue(ct.From, out var srcNode) && srcNode.Parameters != null && srcNode.Parameters.TryGetValue("Branches", out var bObj))
                     {
                         if (bObj is JArray arr)
                         {
@@ -1465,17 +1544,12 @@ namespace Greenshot.Plugin.RecipeEditor.ViewModels
                     dict["SelectionMode"] = "Region";
                     dict["AllowWindowSnapping"] = true;
                     break;
-                case WellKnownStepTypes.Border:
-                    dict["Width"] = 2;
-                    dict["Color"] = "#0078D7";
-                    break;
                 case WellKnownStepTypes.Effect:
                     dict["Effect"] = "DropShadow";
                     dict["ShadowSize"] = 10;
                     dict["Darkness"] = 0.6;
                     break;
                 case WellKnownStepTypes.TextEffect:
-                case "ObfuscateText":
                     dict["Effect"] = "Redact";
                     dict["FillColor"] = "#000000";
                     dict["Patterns"] = new List<string> { @"\b\d{4}-\d{4}-\d{4}-\d{4}\b" };
@@ -1519,15 +1593,12 @@ namespace Greenshot.Plugin.RecipeEditor.ViewModels
                     dict["Destinations"] = new List<string>();
                     break;
                 case WellKnownStepTypes.SaveFile:
-                case "SaveToFile":
-                    dict["Destination"] = "File";
                     dict["SaveDirectory"] = "";
                     dict["FilenamePattern"] = "greenshot ${capturetime}";
                     dict["Format"] = "png";
                     dict["AllowOverwrite"] = false;
                     break;
                 case WellKnownStepTypes.Clipboard:
-                    dict["Destination"] = "Clipboard";
                     dict["ClipboardMode"] = "ImageOnly";
                     dict["ClipboardFormatPNG"] = true;
                     dict["ClipboardFormatDIB"] = true;
@@ -1536,25 +1607,16 @@ namespace Greenshot.Plugin.RecipeEditor.ViewModels
                     dict["ClipboardFormatHTML"] = true;
                     dict["ClipboardFormatHTMLDataUrl"] = false;
                     dict["ClipboardFormatText"] = false;
-                    dict["ClipboardCustomText"] = "${ocr_text}";
-                    break;
-                case WellKnownStepTypes.Editor:
-                    dict["Destination"] = "Editor";
+                    dict["ClipboardCustomText"] = "${Payload.ExtractedText}";
                     break;
                 case WellKnownStepTypes.Printer:
-                    dict["Destination"] = "Printer";
                     dict["ShowPrintDialog"] = true;
-                    break;
-                case WellKnownStepTypes.Email:
-                    dict["Destination"] = "EMail";
-                    dict["EmailSubject"] = "Screenshot";
                     break;
                 case WellKnownStepTypes.CustomDestination:
                     dict["CustomDestinationId"] = "Imgur";
                     break;
                 case WellKnownStepTypes.Notification:
-                    dict["Title"] = "Greenshot Capture";
-                    dict["Message"] = "Capture completed";
+                    dict["ShowNotification"] = true;
                     break;
                 case WellKnownStepTypes.Conditional:
                     dict["Branches"] = new List<object>
@@ -1564,7 +1626,6 @@ namespace Greenshot.Plugin.RecipeEditor.ViewModels
                     };
                     break;
                 case WellKnownStepTypes.UserPrompt:
-                case "PromptChoice":
                     dict["Title"] = "Greenshot decision";
                     dict["Message"] = "Please confirm the next step for this capture:";
                     dict["ShowPreview"] = true;
@@ -1575,13 +1636,18 @@ namespace Greenshot.Plugin.RecipeEditor.ViewModels
                         new Dictionary<string, object> { { "Key", "No" }, { "Label", "No, Cancel" }, { "Style", "Secondary" }, { "IsDefault", false }, { "IsCancel", true } }
                     };
                     break;
+                case WellKnownStepTypes.Stdout:
+                    dict["Text"] = "${Payload.ExtractedText}";
+                    break;
+                case WellKnownStepTypes.Stderr:
+                    dict["Text"] = "The recipe failed.";
+                    dict["ExitCode"] = 1;
+                    dict["Abort"] = true;
+                    break;
                 case WellKnownStepTypes.Processors:
-                    dict["Processors"] = new List<string>();
+                    dict["ProcessorIds"] = new List<string>();
                     break;
                 case "ExternalCommand":
-                case "ExecuteCommand":
-                case "RunCommand":
-                case var _ when node.StepType != null && node.StepType.StartsWith("ExternalCommand", StringComparison.OrdinalIgnoreCase):
                     dict["CommandLine"] = "cmd.exe";
                     dict["Arguments"] = "/c echo Processing {0}";
                     dict["Format"] = "png";
@@ -1591,53 +1657,25 @@ namespace Greenshot.Plugin.RecipeEditor.ViewModels
                     dict["ReloadAfterExecution"] = false;
                     break;
                 case "Imgur":
-                case "ImgurUpload":
-                case "UploadToImgur":
                     dict["Format"] = "png";
                     dict["CopyLinkToClipboard"] = true;
-                    dict["OpenInBrowser"] = false;
                     break;
                 case "Jira":
-                case "JiraUpload":
-                case "UploadToJira":
                     dict["IssueKey"] = "PROJECT-123";
                     dict["Format"] = "png";
                     dict["JpegQuality"] = 80;
                     break;
                 case "Confluence":
-                case "ConfluenceUpload":
-                case "UploadToConfluence":
                     dict["PageId"] = "123456";
                     dict["Format"] = "png";
                     dict["JpegQuality"] = 80;
                     break;
                 case "Office":
-                case "Excel":
-                case "PowerPoint":
-                case "Powerpoint":
-                case "Word":
-                case "OneNote":
-                case "Outlook":
-                    dict["Application"] = string.Equals(node.StepType, "Office", StringComparison.OrdinalIgnoreCase) ? "Word" : node.StepType;
+                    dict["Application"] = "Word";
                     break;
-                case "Zxing":
-                case "ZxingQr":
-                case "ZxingBarcode":
                 case "BarcodeScan":
-                case "DecodeBarcode":
-                case "QrCode":
                     dict["SetVariable"] = "barcode_text";
                     dict["CopyToClipboard"] = true;
-                    break;
-                case "Box":
-                case "BoxUpload":
-                case "UploadToBox":
-                    dict["Format"] = "png";
-                    break;
-                case "Dropbox":
-                case "DropboxUpload":
-                case "UploadToDropbox":
-                    dict["Format"] = "png";
                     break;
             }
             node.Parameters = dict;

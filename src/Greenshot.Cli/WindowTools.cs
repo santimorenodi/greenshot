@@ -246,7 +246,7 @@ internal static class WindowCapturer
 
                 var capture = new Base.Core.Capture();
                 capture.CaptureDetails.Title = selected.Text;
-                var captured = WindowCaptureHelper.CaptureWindow(selected, capture, request.Mode);
+                var captured = Program.Wait(WindowCaptureHelper.CaptureWindowAsync(selected, capture, request.Mode));
                 image = captured?.Image ?? throw new CliException("capture failed");
                 frame = Native.GetFrameRectangle(handle);
                 imageOrigin = new Rectangle(ImageOrigin(image, handle, frame, resolved == WindowCaptureMode.GDI), image.Size);
@@ -256,7 +256,7 @@ internal static class WindowCapturer
                     foreach (var popup in FindPopups(handle, frame))
                     {
                         var popupCapture = new Base.Core.Capture();
-                        var popupResult = WindowCaptureHelper.CaptureWindow(new WindowDetails(popup), popupCapture, request.Mode);
+                        var popupResult = Program.Wait(WindowCaptureHelper.CaptureWindowAsync(new WindowDetails(popup), popupCapture, request.Mode));
                         if (popupResult?.Image == null)
                         {
                             continue;
